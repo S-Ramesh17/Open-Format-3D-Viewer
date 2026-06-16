@@ -21,6 +21,8 @@ class User(Base):
     plan: Mapped[str] = mapped_column(
         Enum("free", "pro", name="plan_enum"), default="free"
     )
+    provider: Mapped[str | None] = mapped_column(String(50))
+    provider_user_id: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
