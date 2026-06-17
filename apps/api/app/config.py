@@ -19,6 +19,18 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
 
+    # CORS
+    ALLOWED_ORIGINS: str = "http://localhost:3000"
+
+    # Rate limiting
+    RATE_LIMIT_FREE_PER_HOUR: int = 100
+    RATE_LIMIT_PRO_PER_HOUR: int = 10000
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        """Parse comma-separated origins into a list."""
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
