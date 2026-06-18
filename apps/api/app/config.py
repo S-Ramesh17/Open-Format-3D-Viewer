@@ -35,3 +35,14 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+@property
+def effective_database_url_sync(self) -> str:
+    """
+    Derive sync URL from async URL if DATABASE_URL_SYNC not explicitly set.
+    Render only provides one connection string — this handles that case.
+    """
+    if self.DATABASE_URL_SYNC:
+        return self.DATABASE_URL_SYNC
+    # Convert asyncpg URL to psycopg2 URL
+    return self.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
