@@ -23,11 +23,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "max-age=31536000; includeSubDomains"
         )
 
-        # Strict CSP — API responses should never load external resources
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; "
-            "frame-ancestors 'none';"
-        )
+        # Allow Swagger UI while keeping API secure
+        if request.url.path in ["/docs", "/redoc", "/openapi.json"]:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "img-src 'self' data: https:; "
+                "font-src 'self' https://cdn.jsdelivr.net; "
+                "frame-ancestors 'none';"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; "
+                "frame-ancestors 'none';"
+            )
 
         # Legacy XSS protection for older browsers
         response.headers["X-XSS-Protection"] = "1; mode=block"
