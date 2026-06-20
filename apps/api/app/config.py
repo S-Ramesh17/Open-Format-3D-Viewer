@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     RATE_LIMIT_FREE_PER_HOUR: int = 100
     RATE_LIMIT_PRO_PER_HOUR: int = 10000
 
+    # AWS / S3
+    AWS_REGION: str = "us-east-1"
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    S3_RAW_BUCKET: str = ""
+    S3_PROCESSED_BUCKET: str = ""
+    CDN_BASE_URL: str = ""
+
+    # Upload limits
+    MAX_UPLOAD_SIZE_BYTES: int = 500 * 1024 * 1024  # 500MB
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
