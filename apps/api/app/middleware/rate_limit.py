@@ -11,11 +11,11 @@ from app.core.redis import get_redis
 # Routes that do not require auth — skip rate limiting
 EXEMPT_PATHS = {
     "/health",
-    "/auth/register",
-    "/auth/login",
-    "/auth/refresh",
-    "/auth/google",
-    "/auth/google/callback",
+    "/v1/auth/register",
+    "/v1/auth/login",
+    "/v1/auth/refresh",
+    "/v1/auth/google",
+    "/v1/auth/google/callback",
     "/docs",
     "/openapi.json",
     "/redoc",
@@ -102,15 +102,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def _identify_request(self, request: Request) -> tuple[str, str]:
         """
-        Extract user_id and plan from JWT token if present.
+        Extract user_id and plan from, in priority order:
+        1. Authorization: Bearer ofv_...  (API key)
+        2. Authorization: Bearer <jwt>    (explicit header)
+        3. access_token cookie            (browser sessions)
         Falls back to IP address for unauthenticated requests.
         Returns (identifier, plan).
         """
         from jose import JWTError
 
+        from app.core.cookies import ACCESS_TOKEN_COOKIE
         from app.core.security import decode_token
 
         auth_header = request.headers.get("Authorization", "")
+        token: str | None = None
 
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
@@ -120,13 +125,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 import hashlib
                 key_id = hashlib.sha256(token.encode()).hexdigest()[:16]
                 return f"apikey:{key_id}", "free"
+        else:
+            token = request.cookies.get(ACCESS_TOKEN_COOKIE)
 
-            # JWT path
+        if token:
             try:
                 payload = decode_token(token)
                 user_id = payload.get("sub", "")
                 if user_id:
-                    # Load plan from DB for accurate limiting
                     plan = await self._get_user_plan(user_id)
                     return f"user:{user_id}", plan
             except JWTError:

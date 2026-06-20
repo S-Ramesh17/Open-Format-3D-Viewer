@@ -1,6 +1,8 @@
+import logging
 import uuid
 
-from authlib.integrations.starlette_client import OAuth
+from authlib.integrations.starlette_client import OAuth, OAuthError
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.config import Config
@@ -10,6 +12,8 @@ from app.config import settings
 from app.models.user import User
 from app.schemas.auth import TokenResponse
 from app.services.auth import _issue_tokens
+
+logger = logging.getLogger(__name__)
 
 # ── OAuth client setup ───────────────────────────────────────────────────────
 config = Config(environ={
@@ -25,8 +29,8 @@ oauth.register(
 )
 
 
-async def get_google_authorization_url(request: Request) -> str:
-    """Generate Google OAuth2 authorization URL and return it."""
+async def get_google_authorization_url(request: Request) -> RedirectResponse:
+    """Redirect browser to Google OAuth2 consent screen."""
     redirect_uri = settings.GOOGLE_REDIRECT_URI
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
@@ -34,30 +38,34 @@ async def get_google_authorization_url(request: Request) -> str:
 async def handle_google_callback(
     request: Request,
     db: AsyncSession,
-) -> TokenResponse:
+) -> tuple[TokenResponse, User]:
     """
     Handle Google OAuth2 callback.
     Exchange code for token, fetch profile, find or create user.
+    Returns (TokenResponse, User) — router builds the redirect + cookies.
+    Raises OAuthCallbackError on any failure so the router can redirect
+    to an error page instead of returning JSON.
     """
-    from fastapi import HTTPException
-
     try:
         token = await oauth.google.authorize_access_token(request)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Google OAuth failed")
+    except OAuthError as exc:
+        logger.error("Google OAuth token exchange failed: %s", exc)
+        raise OAuthCallbackError(f"OAuth token exchange failed: {exc}")
+    except Exception as exc:
+        logger.error("Unexpected error during Google OAuth: %s", exc)
+        raise OAuthCallbackError("OAuth failed unexpectedly")
 
     user_info = token.get("userinfo")
     if not user_info:
-        raise HTTPException(status_code=400, detail="Could not fetch user info from Google")
+        raise OAuthCallbackError("Could not fetch user info from Google")
 
     google_sub = user_info.get("sub")
     email = user_info.get("email")
-    full_name = user_info.get("name")
+    full_name = user_info.get("name", "")
 
     if not google_sub or not email:
-        raise HTTPException(status_code=400, detail="Incomplete user info from Google")
+        raise OAuthCallbackError("Incomplete user info from Google")
 
-    # Find existing user by provider_user_id
     result = await db.execute(
         select(User).where(
             User.provider == "google",
@@ -67,18 +75,15 @@ async def handle_google_callback(
     user = result.scalar_one_or_none()
 
     if not user:
-        # Check if email already registered via password
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
 
         if user:
-            # Link Google to existing account
             user.provider = "google"
             user.provider_user_id = google_sub
             await db.commit()
             await db.refresh(user)
         else:
-            # Create new user
             user = User(
                 id=uuid.uuid4(),
                 email=email,
@@ -90,4 +95,10 @@ async def handle_google_callback(
             await db.commit()
             await db.refresh(user)
 
-    return await _issue_tokens(str(user.id))
+    tokens = await _issue_tokens(str(user.id))
+    return tokens, user
+
+
+class OAuthCallbackError(Exception):
+    """Raised when Google OAuth callback fails. Router must redirect, never return JSON."""
+    pass

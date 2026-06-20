@@ -1,25 +1,30 @@
 import uuid
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import envelope, envelope_model
+from app.config import settings
+from app.core.cookies import (
+    ACCESS_TOKEN_COOKIE,
+    REFRESH_TOKEN_COOKIE,
+    clear_auth_cookies,
+    set_auth_cookies,
+)
 from app.core.dependencies import get_current_user
+from app.core.exceptions import AuthenticationException
 from app.db.engine import get_db
 from app.models.user import User
 from app.schemas.auth import (
+    ApiKeyCreatedResponse,
+    ApiKeyResponse,
     CreateApiKeyRequest,
     LoginRequest,
-    LogoutRequest,
-    RefreshRequest,
     RegisterRequest,
+    UserResponse,
 )
-from app.services.api_key import (
-    create_api_key,
-    list_api_keys,
-    revoke_api_key,
-)
+from app.services.api_key import create_api_key, list_api_keys, revoke_api_key
 from app.services.auth import (
     login_user,
     logout_user,
@@ -27,18 +32,21 @@ from app.services.auth import (
     register_user,
 )
 from app.services.oauth import get_google_authorization_url, handle_google_callback
-from starlette.requests import Request
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 
 @router.post("/register", status_code=201)
 async def register(
     data: RegisterRequest,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    result = await register_user(data, db)
-    return envelope_model(result, status_code=201)
+    tokens, user = await register_user(data, db)
+    user_response = UserResponse.model_validate(user)
+    envelope_response = envelope_model(user_response, status_code=201)
+    set_auth_cookies(envelope_response, tokens.access_token, tokens.refresh_token)
+    return envelope_response
 
 
 @router.post("/login")
@@ -46,26 +54,44 @@ async def login(
     data: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    result = await login_user(data, db)
-    return envelope_model(result)
+    tokens, user = await login_user(data, db)
+    user_response = UserResponse.model_validate(user)
+    envelope_response = envelope_model(user_response)
+    set_auth_cookies(envelope_response, tokens.access_token, tokens.refresh_token)
+    return envelope_response
 
 
 @router.post("/refresh")
-async def refresh(data: RefreshRequest) -> JSONResponse:
-    result = await refresh_access_token(data.refresh_token)
-    return envelope_model(result)
+async def refresh(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
+    if not refresh_token:
+        raise AuthenticationException("Refresh token missing")
+
+    tokens, user = await refresh_access_token(refresh_token, db)
+    user_response = UserResponse.model_validate(user)
+    envelope_response = envelope_model(user_response)
+    set_auth_cookies(envelope_response, tokens.access_token, tokens.refresh_token)
+    return envelope_response
 
 
 @router.post("/logout", status_code=204)
-async def logout(data: LogoutRequest) -> None:
-    await logout_user(data.refresh_token)
+async def logout(request: Request) -> Response:
+    refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
+    if refresh_token:
+        await logout_user(refresh_token)
+
+    response = Response(status_code=204)
+    clear_auth_cookies(response)
+    return response
 
 
 @router.get("/me")
 async def me(
     current_user: User = Depends(get_current_user),
 ) -> JSONResponse:
-    from app.schemas.auth import UserResponse
     response = UserResponse.model_validate(current_user)
     return envelope_model(response)
 
@@ -76,7 +102,6 @@ async def create_key(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    from app.schemas.auth import ApiKeyCreatedResponse
     raw_key, api_key = await create_api_key(data.name, current_user, db)
     response = ApiKeyCreatedResponse(
         key=raw_key,
@@ -92,7 +117,6 @@ async def get_keys(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    from app.schemas.auth import ApiKeyResponse
     keys = await list_api_keys(current_user, db)
     return envelope([ApiKeyResponse.model_validate(k).model_dump(mode="json") for k in keys])
 
@@ -106,15 +130,35 @@ async def delete_key(
     await revoke_api_key(key_id, current_user, db)
 
 
-@router.get("/google")
-async def google_login(request: Request):
+@router.get("/google", response_class=RedirectResponse)
+async def google_login(request: Request) -> RedirectResponse:
+    """Initiate Google OAuth2 flow — always redirects to Google."""
     return await get_google_authorization_url(request)
 
 
-@router.get("/google/callback")
+@router.get("/google/callback", response_class=RedirectResponse)
 async def google_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> JSONResponse:
-    result = await handle_google_callback(request, db)
-    return envelope_model(result)
+) -> RedirectResponse:
+    """
+    Google OAuth2 callback — ALWAYS returns a RedirectResponse, never JSON.
+    On success: redirect to /dashboard with cookies set.
+    On failure: redirect to /login?error=oauth_failed.
+    """
+    try:
+        tokens, _user = await handle_google_callback(request, db)
+    except Exception:
+        # Catch everything — OAuthCallbackError, DB errors, anything.
+        # Never let the global JSON error handler intercept this route.
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_URL}/login?error=oauth_failed",
+            status_code=302,
+        )
+
+    redirect = RedirectResponse(
+        url=f"{settings.FRONTEND_URL}/dashboard",
+        status_code=302,
+    )
+    set_auth_cookies(redirect, tokens.access_token, tokens.refresh_token)
+    return redirect

@@ -1,38 +1,49 @@
-from fastapi import Depends, HTTPException, Security
+from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cookies import ACCESS_TOKEN_COOKIE
 from app.core.security import decode_token
 from app.db.engine import get_db
 from app.models.user import User
-from app.services.auth import get_user_by_id
 from app.services.api_key import validate_api_key
+from app.services.auth import get_user_by_id
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """
-    Accepts either:
-    - JWT access token: Authorization: Bearer eyJ...
-    - API key:          Authorization: Bearer ofv_...
-    Raises HTTP 401 if neither is valid.
+    Resolve the authenticated user from, in priority order:
+    1. Authorization: Bearer ofv_... (API key — header only, never cookie)
+    2. Authorization: Bearer <jwt>   (explicit header — used by API clients/tools)
+    3. access_token cookie           (browser sessions)
+    Raises HTTP 401 if none are valid.
     """
-    if not credentials:
+    token: str | None = None
+    is_api_key = False
+
+    if credentials:
+        token = credentials.credentials
+        is_api_key = token.startswith("ofv_")
+
+    if not token:
+        token = request.cookies.get(ACCESS_TOKEN_COOKIE)
+
+    if not token:
         raise HTTPException(
             status_code=401,
-            detail="Authorization header missing",
+            detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = credentials.credentials
-
-    # ── Try API key first (ofv_ prefix) ─────────────────────────────────────
-    if token.startswith("ofv_"):
+    # ── API key path ─────────────────────────────────────────────────────────
+    if is_api_key:
         user = await validate_api_key(token, db)
         if not user:
             raise HTTPException(
@@ -42,7 +53,7 @@ async def get_current_user(
             )
         return user
 
-    # ── Try JWT ──────────────────────────────────────────────────────────────
+    # ── JWT path (header or cookie) ─────────────────────────────────────────
     try:
         payload = decode_token(token)
     except JWTError:

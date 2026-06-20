@@ -26,7 +26,9 @@ from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse
 
 
-async def register_user(data: RegisterRequest, db: AsyncSession) -> TokenResponse:
+async def register_user(
+    data: RegisterRequest, db: AsyncSession
+) -> tuple[TokenResponse, User]:
     result = await db.execute(select(User).where(User.email == data.email))
     if result.scalar_one_or_none():
         raise ConflictException("Email already registered")
@@ -41,10 +43,13 @@ async def register_user(data: RegisterRequest, db: AsyncSession) -> TokenRespons
     await db.commit()
     await db.refresh(user)
 
-    return await _issue_tokens(str(user.id))
+    tokens = await _issue_tokens(str(user.id))
+    return tokens, user
 
 
-async def login_user(data: LoginRequest, db: AsyncSession) -> TokenResponse:
+async def login_user(
+    data: LoginRequest, db: AsyncSession
+) -> tuple[TokenResponse, User]:
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
 
@@ -54,10 +59,13 @@ async def login_user(data: LoginRequest, db: AsyncSession) -> TokenResponse:
     if not verify_password(data.password, user.password_hash):
         raise AuthenticationException("Invalid credentials")
 
-    return await _issue_tokens(str(user.id))
+    tokens = await _issue_tokens(str(user.id))
+    return tokens, user
 
 
-async def refresh_access_token(refresh_token: str) -> TokenResponse:
+async def refresh_access_token(
+    refresh_token: str, db: AsyncSession
+) -> tuple[TokenResponse, User]:
     from jose import JWTError
 
     try:
@@ -77,7 +85,9 @@ async def refresh_access_token(refresh_token: str) -> TokenResponse:
         raise AuthenticationException("Refresh token revoked or expired")
 
     await delete_refresh_token(refresh_token)
-    return await _issue_tokens(user_id)
+    tokens = await _issue_tokens(user_id)
+    user = await get_user_by_id(user_id, db)
+    return tokens, user
 
 
 async def logout_user(refresh_token: str) -> None:
