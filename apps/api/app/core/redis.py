@@ -69,3 +69,17 @@ async def delete_all_user_refresh_tokens(user_id: str) -> None:
                 await redis.delete(key)
         if cursor == 0:
             break
+
+
+import json as _json
+
+
+async def publish_model_event(user_id: str, event: str, data: dict) -> None:
+    """
+    Publish a real-time event to a user's WebSocket channel.
+    Consumed by apps/ws-server's per-connection Redis subscriber.
+    """
+    redis = await get_redis()
+    channel = f"model_events:{user_id}"
+    payload = _json.dumps({"event": event, "data": data})
+    await redis.publish(channel, payload)

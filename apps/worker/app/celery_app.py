@@ -1,6 +1,9 @@
 from celery import Celery
 
 from app.config import settings
+from app.sentry import init_worker_sentry
+
+init_worker_sentry()
 
 celery_app = Celery(
     "openformat_worker",
@@ -24,5 +27,10 @@ celery_app.conf.update(
     },
     task_default_queue="ifc",
 )
+import app.tasks.ifc
+import app.tasks.mesh
+import app.tasks.bcf
+import app.tasks.scan
+import app.tasks.webhook
 
-celery_app.autodiscover_tasks(["app.tasks"])
+celery_app.autodiscover_tasks(["app"])

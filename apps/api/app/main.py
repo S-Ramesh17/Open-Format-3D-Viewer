@@ -9,6 +9,8 @@ from app.api.responses import envelope
 from app.config import settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.redis import close_redis, get_redis
+from app.core.sentry import init_sentry
+init_sentry()
 from app.db.engine import AsyncSessionLocal
 from app.middleware.auth_middleware import AuthMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware

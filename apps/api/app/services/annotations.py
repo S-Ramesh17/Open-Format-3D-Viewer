@@ -35,8 +35,20 @@ async def create_annotation(
     db.add(annotation)
     await db.commit()
     await db.refresh(annotation)
-    return AnnotationResponse.model_validate(annotation)
 
+    from app.core.redis import publish_model_event
+    from app.services.webhooks import dispatch_event
+
+    await publish_model_event(
+        str(user_id),
+        "annotation:update",
+        {"annotation_id": str(annotation.id), "model_id": str(model_id), "action": "created"},
+    )
+    await dispatch_event(
+        "annotation.created", {"annotation_id": str(annotation.id)}, user_id, db
+    )
+
+    return AnnotationResponse.model_validate(annotation)
 
 async def list_annotations(
     model_id: uuid.UUID,

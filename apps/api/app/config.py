@@ -37,8 +37,12 @@ class Settings(BaseSettings):
     S3_PROCESSED_BUCKET: str = ""
     CDN_BASE_URL: str = ""
 
-    # Upload limits
+   # Upload limits
     MAX_UPLOAD_SIZE_BYTES: int = 500 * 1024 * 1024  # 500MB
+
+    # Observability
+    SENTRY_DSN: str = ""
+    APP_VERSION: str = "0.1.0"
 
     @property
     def allowed_origins_list(self) -> list[str]:

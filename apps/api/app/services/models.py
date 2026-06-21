@@ -124,10 +124,19 @@ async def confirm_upload(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse
     await db.refresh(model)
 
     # ClamAV scan dispatched first (scan queue), processing task dispatched after.
-    # In production, process_model should be chained to run only after scan
     # passes (Celery chain/signature); scaffolded as parallel dispatch here.
     trigger_clamav_scan(model.s3_raw_key)
     _enqueue_processing_task(model)
+
+    from app.core.redis import publish_model_event
+    from app.services.webhooks import dispatch_event
+
+    await publish_model_event(
+        str(model.uploaded_by), "model:sync", {"model_id": str(model.id), "status": "processing"}
+    )
+    await dispatch_event(
+        "model.ready", {"model_id": str(model.id)}, model.uploaded_by, db
+    )
 
     return ModelResponse.model_validate(model)
 
