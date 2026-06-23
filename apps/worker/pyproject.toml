@@ -3,7 +3,6 @@ name = "openformat-worker"
 version = "0.1.0"
 description = "Open Format Celery worker"
 requires-python = ">=3.12"
-package-mode = false
 dependencies = [
     "celery[redis]>=5.4.0,<6.0.0",
     "redis>=5.0.0,<6.0.0",
@@ -14,9 +13,14 @@ dependencies = [
     "python-dotenv>=1.2.2,<2.0.0",
     "pydantic-settings>=2.14.1,<3.0.0",
     "sentry-sdk[celery]>=2.63.0,<3.0.0",
-    # IFC parsing — install separately in production image from conda-forge
-    # ifcopenshell is not on PyPI; document separately
+    # IFC parsing — NOT on PyPI; install from conda-forge or pre-built wheel
+    # conda install -c conda-forge ifcopenshell
+    # pythonOCC-core — NOT on PyPI; install from conda-forge
+    # conda install -c conda-forge pythonocc-core=7.7.2
 ]
+
+[tool.poetry]
+package-mode = false
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

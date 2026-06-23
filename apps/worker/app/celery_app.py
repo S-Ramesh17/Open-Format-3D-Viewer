@@ -23,6 +23,8 @@ celery_app.conf.update(
     task_routes={
         "app.tasks.ifc.*": {"queue": "ifc"},
         "app.tasks.mesh.*": {"queue": "mesh"},
+        "app.tasks.step.*": {"queue": "mesh"},
+        "app.tasks.gltf.*": {"queue": "mesh"},
         "app.tasks.bcf.*": {"queue": "bcf"},
         "app.tasks.scan.*": {"queue": "scan"},
         "app.tasks.webhook.*": {"queue": "webhook"},
@@ -36,5 +38,7 @@ import app.tasks.mesh      # noqa: E402, F401
 import app.tasks.bcf       # noqa: E402, F401
 import app.tasks.scan      # noqa: E402, F401
 import app.tasks.webhook   # noqa: E402, F401
+import app.tasks.step
+import app.tasks.gltf  
 
 celery_app.autodiscover_tasks(["app"])
