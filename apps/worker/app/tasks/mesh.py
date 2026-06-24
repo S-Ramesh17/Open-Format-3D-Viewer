@@ -1,5 +1,5 @@
 """
-Mesh queue router — Week 2 Day 2.
+Mesh queue router
 
 Routes non-IFC formats to their dedicated processing tasks:
   - step / stp  → app.tasks.step.process_step
@@ -24,6 +24,8 @@ _FORMAT_TO_TASK: dict[str, str] = {
     "stp":  "app.tasks.step.process_step",
     "gltf": "app.tasks.gltf.process_gltf",
     "glb":  "app.tasks.gltf.process_gltf",
+    "obj":  "app.tasks.obj.process_obj",
+    "stl":  "app.tasks.stl.process_stl",
 }
 
 

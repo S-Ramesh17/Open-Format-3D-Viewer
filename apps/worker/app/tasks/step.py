@@ -231,7 +231,9 @@ def _collect_step_geometry_stats(shape: Any) -> dict:
 @celery_app.task(
     name="app.tasks.step.process_step",
     bind=True,
-    max_retries=3,
+    time_limit=1800,
+    soft_time_limit=1500,
+    max_retries=2,
     default_retry_delay=60,
     acks_late=True,
     reject_on_worker_lost=True,

@@ -25,6 +25,8 @@ celery_app.conf.update(
         "app.tasks.mesh.*": {"queue": "mesh"},
         "app.tasks.step.*": {"queue": "mesh"},
         "app.tasks.gltf.*": {"queue": "mesh"},
+        "app.tasks.obj.*":  {"queue": "mesh"},
+        "app.tasks.stl.*":  {"queue": "mesh"},
         "app.tasks.bcf.*": {"queue": "bcf"},
         "app.tasks.scan.*": {"queue": "scan"},
         "app.tasks.webhook.*": {"queue": "webhook"},
@@ -33,12 +35,14 @@ celery_app.conf.update(
 )
 
 # Explicit imports so autodiscover works even if PYTHONPATH is minimal
-import app.tasks.ifc       # noqa: E402, F401
-import app.tasks.mesh      # noqa: E402, F401
-import app.tasks.bcf       # noqa: E402, F401
-import app.tasks.scan      # noqa: E402, F401
-import app.tasks.webhook   # noqa: E402, F401
-import app.tasks.step
-import app.tasks.gltf  
-
+import app.tasks.ifc           # noqa: E402, F401
+import app.tasks.mesh          # noqa: E402, F401
+import app.tasks.step          # noqa: E402, F401
+import app.tasks.gltf          # noqa: E402, F401
+import app.tasks.obj           # noqa: E402, F401
+import app.tasks.stl           # noqa: E402, F401
+import app.tasks.bcf           # noqa: E402, F401
+import app.tasks.scan          # noqa: E402, F401
+import app.tasks.webhook       # noqa: E402, F401
+  
 celery_app.autodiscover_tasks(["app"])

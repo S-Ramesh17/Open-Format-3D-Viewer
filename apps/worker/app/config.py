@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class WorkerSettings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
-    DATABASE_URL: str = "postgresql://openformat:devpassword@localhost:5432/openformat_dev"
+    DATABASE_URL: str
     AWS_REGION: str = "us-east-1"
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
@@ -20,7 +20,7 @@ class WorkerSettings(BaseSettings):
 
      # GLTF/GLB pipeline tools
     GLTF_PIPELINE_BIN: str = "gltf-pipeline"   # npm install -g gltf-pipeline
-    GLTF_VALIDATOR_BIN: str = "gltf_validator"  # npm install -g gltf-validator
+    GLTF_VALIDATOR_BIN: str = "gltf-validator"  # npm install -g gltf-validator
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
