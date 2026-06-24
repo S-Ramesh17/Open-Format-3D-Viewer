@@ -1,11 +1,23 @@
 from pydantic_settings import BaseSettings
+from pydantic import computed_field
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
-    DATABASE_URL_SYNC: str
+    # Only one source of truth for the DB connection
+    DATABASE_URL: str          # must start with postgresql+asyncpg://
     SECRET_KEY: str
     ENVIRONMENT: str = "development"
+
+    @computed_field
+    @property
+    def DATABASE_URL_SYNC(self) -> str:
+        """
+        Derive the sync URL (psycopg2) from the async URL (asyncpg).
+        Alembic uses this. It is always consistent with DATABASE_URL.
+        """
+        return self.DATABASE_URL.replace(
+            "postgresql+asyncpg://", "postgresql://"
+        )
 
     # JWT
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
@@ -37,7 +49,7 @@ class Settings(BaseSettings):
     S3_PROCESSED_BUCKET: str = ""
     CDN_BASE_URL: str = ""
 
-   # Upload limits
+    # Upload limits
     MAX_UPLOAD_SIZE_BYTES: int = 500 * 1024 * 1024  # 500MB
 
     # Observability
