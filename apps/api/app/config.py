@@ -1,23 +1,35 @@
+# apps/api/app/config.py
 from pydantic_settings import BaseSettings
-from pydantic import computed_field
+from pydantic import computed_field, field_validator
 
 
 class Settings(BaseSettings):
-    # Only one source of truth for the DB connection
-    DATABASE_URL: str          # must start with postgresql+asyncpg://
+    DATABASE_URL: str
     SECRET_KEY: str
     ENVIRONMENT: str = "development"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalise_database_url(cls, v: str) -> str:
+
+        if v.startswith("postgresql+asyncpg://"):
+            return v
+       
+        if v.startswith("postgresql://") or v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)\
+                     .replace("postgresql://", "postgresql+asyncpg://", 1)
+        raise ValueError(
+            f"DATABASE_URL must start with postgresql:// or postgresql+asyncpg://, got: {v!r}"
+        )
 
     @computed_field
     @property
     def DATABASE_URL_SYNC(self) -> str:
         """
-        Derive the sync URL (psycopg2) from the async URL (asyncpg).
-        Alembic uses this. It is always consistent with DATABASE_URL.
+        psycopg2-compatible URL for Alembic migrations (sync engine).
+        Always derived from DATABASE_URL — never independently configured.
         """
-        return self.DATABASE_URL.replace(
-            "postgresql+asyncpg://", "postgresql://"
-        )
+        return self.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
 
     # JWT
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60

@@ -4,12 +4,12 @@ from app.config import settings
 from sqlalchemy import engine_from_config, pool, text
 from alembic import context
 from app.db.base import Base
-from app.models import * 
+from app.models import *
 
 config = context.config
 config.set_main_option(
     "sqlalchemy.url",
-    settings.DATABASE_URL  # now always derived from DATABASE_URL — never stale
+    settings.DATABASE_URL_SYNC # now always derived from DATABASE_URL — never stale
 )
 
 if config.config_file_name is not None:
