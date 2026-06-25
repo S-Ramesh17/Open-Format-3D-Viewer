@@ -2,7 +2,7 @@ import re
 import uuid
 
 import boto3
-import magic
+import filetype
 from botocore.config import Config as BotoConfig
 
 from app.config import settings
@@ -84,23 +84,30 @@ def validate_mime_type_declared(content_type: str) -> None:
 
 def validate_mime_type_from_bytes(header_bytes: bytes, declared_filename: str) -> str:
     """
-    Authoritative MIME validation using python-magic against actual file
-    bytes (magic numbers), not client-supplied headers. Called during
-    /confirm after downloading the first N bytes from S3.
+    Authoritative MIME validation using filetype against actual file bytes
+    (magic numbers), not client-supplied headers. Called during /confirm
+    after downloading the first N bytes from S3.
 
     Returns the detected MIME type. Raises ValidationException if the
     detected type is implausible for the declared extension.
 
-    Note: IFC/STEP files are plain-text SPFF format and will detect as
-    text/plain — this is expected and allowed. Binary formats (glb, stl
-    binary) detect via magic bytes.
+    Note: IFC/STEP/OBJ files are plain-text formats (SPFF / Wavefront).
+    filetype returns None for these since they carry no binary magic bytes —
+    we resolve that to application/octet-stream, which is the same result
+    libmagic produces for these formats on many systems.
+
+    Binary formats (GLB, binary STL) are detected via their magic bytes.
     """
-    detected = magic.from_buffer(header_bytes, mime=True)
+    # filetype.guess() inspects magic bytes with no system library dependency.
+    # Returns None when the byte signature is unrecognised (all text-based
+    # 3D formats fall into this category).
+    guess = filetype.guess(header_bytes)
+    detected = guess.mime if guess is not None else "application/octet-stream"
 
     ext = "." + declared_filename.rsplit(".", 1)[-1].lower()
 
-    # IFC and STEP are ASCII SPFF text — magic correctly reports text/plain
-    # or application/octet-stream depending on libmagic version/content.
+    # IFC, STEP, STP, OBJ are ASCII text formats — no binary magic bytes.
+    # filetype correctly returns None → we use application/octet-stream.
     text_based_formats = {".ifc", ".step", ".stp", ".obj"}
 
     if ext in text_based_formats:
