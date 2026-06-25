@@ -16,6 +16,7 @@ from pathlib import Path
 
 import boto3
 from botocore.config import Config as BotoConfig
+from sqlalchemy import create_engine
 
 from app.config import settings
 
@@ -71,16 +72,16 @@ def _raw_sql(sql: str):
     from sqlalchemy import text
     return text(sql)
 
+sync_engine = None
 
 def get_sync_engine():
-    """Synchronous SQLAlchemy engine for use inside Celery tasks."""
-    from sqlalchemy import create_engine
-
-    url = settings.DATABASE_URL
-    url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    url = url.replace("postgresql+aiopg://", "postgresql+psycopg2://")
-    return create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=0)
-
+        global _sync_engine
+        if _sync_engine is None:
+            url = settings.DATABASE_URL
+            url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+            url = url.replace("postgresql+aiopg://", "postgresql+psycopg2://")
+            _sync_engine = create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=0)
+        return _sync_engine
 
 def get_model_row(engine, model_id: str) -> dict | None:
     """Fetch model row as a plain dict. Returns None if not found."""

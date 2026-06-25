@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
 from app.config import settings
+from app.tasks.common import get_sync_engine
 
 logger = logging.getLogger(__name__)
 
@@ -78,15 +79,6 @@ def _upload_xkt_chunk(local_path: str, s3_key: str) -> None:
 # ---------------------------------------------------------------------------
 # Helpers — DB (sync SQLAlchemy — Celery runs sync)
 # ---------------------------------------------------------------------------
-
-def _get_sync_engine():
-    """Create a synchronous SQLAlchemy engine for use inside Celery tasks."""
-    url = settings.DATABASE_URL
-    # If the URL uses asyncpg driver, swap to psycopg2 for sync access
-    url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    url = url.replace("postgresql+aiopg://", "postgresql+psycopg2://")
-    return create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=0)
-
 
 def _get_model_row(engine, model_id: str) -> dict | None:
     """Fetch model row as dict. Returns None if not found."""
