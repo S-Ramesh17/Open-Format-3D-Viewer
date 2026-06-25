@@ -45,6 +45,7 @@ bleach            = "^6.2.0"    # sanitize.py: bleach.clean()
 httpx             = "^0.28.0"   # used in tests & OAuth callbacks
 filetype          = "^1.2.0"    # storage.py: filetype.guess()
 itsdangerous      = "^2.2.0"    # starlette SessionMiddleware indirect dep — keep explicit
+bcrypt = "4.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest            = "^8.3.0"
