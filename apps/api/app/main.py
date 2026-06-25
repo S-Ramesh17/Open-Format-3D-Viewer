@@ -28,10 +28,14 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    redis = await get_redis()
-    await redis.ping()
-    yield
-    await close_redis()
+     # Validate Redis
+     redis = await get_redis()
+     await redis.ping()
+     # Validate DB
+     async with AsyncSessionLocal() as db:
+         await db.execute(text("SELECT 1"))
+     yield
+     await close_redis()
 
 
 app = FastAPI(
