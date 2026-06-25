@@ -45,6 +45,7 @@ httpx = "^0.28.0"
 
 # Works on Windows (dev), Linux (Render), macOS (CI) without any system library.
 filetype = "^1.2.0"
+itsdangerous = "^2.2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"
@@ -54,6 +55,7 @@ httpx = "^0.28.0"
 black = "^24.10.0"
 ruff = "^0.8.0"
 mypy = "^1.13.0"
+itsdangerous = ">=2.1.2,<3.0.0"
 
 [build-system]
 requires = ["poetry-core>=1.9.0"]

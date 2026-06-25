@@ -1060,6 +1060,18 @@ files = [
 ]
 
 [[package]]
+name = "itsdangerous"
+version = "2.2.0"
+description = "Safely pass data to untrusted environments and back."
+optional = false
+python-versions = ">=3.8"
+groups = ["main", "dev"]
+files = [
+    {file = "itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef"},
+    {file = "itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173"},
+]
+
+[[package]]
 name = "jmespath"
 version = "1.1.0"
 description = "JSON Matching Expressions"
@@ -2647,4 +2659,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "32fa40dfd772c763bba669c06150a0120efcdb41a6f38521c4f74aacf8fdbbd2"
+content-hash = "d3b6ce7694b308f29524a5dc4c90ca6e17657ed5a9742d8f0a2a9c41265f81cc"
