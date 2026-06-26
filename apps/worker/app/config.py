@@ -22,6 +22,11 @@ class WorkerSettings(BaseSettings):
     GLTF_PIPELINE_BIN: str = "gltf-pipeline"   # npm install -g gltf-pipeline
     GLTF_VALIDATOR_BIN: str = "gltf-validator"  # npm install -g gltf-validator
 
+    # ClamAV (TCP socket via clamd)
+    CLAMD_HOST: str = "localhost"
+    CLAMD_PORT: int = 3310
+    CLAMD_TIMEOUT: int = 60
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

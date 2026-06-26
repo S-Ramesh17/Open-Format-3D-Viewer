@@ -270,6 +270,10 @@ def process_step(self: Task, model_id: str) -> dict:
             # ── 2. Download from S3 ────────────────────────────────────────
             download_raw_file(s3_raw_key, step_local)
 
+            # ── 2b. 500 MB file size guard ─────────────────────────────────
+            from app.tasks.error_handler import assert_file_size
+            assert_file_size(step_local)
+
             # ── 3. Read STEP ───────────────────────────────────────────────
             shape = _read_step(step_local)
 

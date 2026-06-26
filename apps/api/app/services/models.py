@@ -25,6 +25,8 @@ from app.services.storage import (
     validate_mime_type_from_bytes,
     verify_object_exists,
 )
+from app.core.redis import publish_model_event
+from app.services.webhooks import dispatch_event
 
 EXT_TO_FORMAT = {
     ".ifc": "ifc",
@@ -49,6 +51,43 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
         return datetime.fromisoformat(ts_str), uuid.UUID(id_str)
     except Exception:
         raise ValidationException("Invalid pagination cursor")
+
+
+async def list_models(
+    project_id: uuid.UUID,
+    db: AsyncSession,
+    limit: int = 20,
+    cursor: str | None = None,
+) -> tuple[list[ModelResponse], str | None]:
+    """
+    List models belonging to a project, ordered by created_at DESC, id DESC.
+    Cursor-paginated. Project membership is enforced by the router before this call.
+    """
+    query = select(Model).where(Model.project_id == project_id)
+
+    if cursor:
+        cursor_ts, cursor_id = _decode_cursor(cursor)
+        query = query.where(
+            (Model.created_at < cursor_ts)
+            | ((Model.created_at == cursor_ts) & (Model.id < cursor_id))
+        )
+
+    query = query.order_by(Model.created_at.desc(), Model.id.desc()).limit(limit + 1)
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    models = [ModelResponse.model_validate(r) for r in rows]
+
+    next_cursor = None
+    if has_more and rows:
+        last = rows[-1]
+        next_cursor = _encode_cursor(last.created_at, last.id)
+
+    return models, next_cursor
 
 
 async def initiate_upload(
@@ -124,12 +163,10 @@ async def confirm_upload(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse
     await db.refresh(model)
 
     # ClamAV scan dispatched first (scan queue), processing task dispatched after.
-    # passes (Celery chain/signature); scaffolded as parallel dispatch here.
-    trigger_clamav_scan(model.s3_raw_key)
+    # Parallel dispatch: scan runs independently; processing continues regardless.
+    trigger_clamav_scan(str(model.id), model.s3_raw_key)
     _enqueue_processing_task(model)
 
-    from app.core.redis import publish_model_event
-    from app.services.webhooks import dispatch_event
 
     await publish_model_event(
         str(model.uploaded_by), "model:sync", {"model_id": str(model.id), "status": "processing"}
@@ -239,12 +276,40 @@ async def get_tree(model_id: uuid.UUID, db: AsyncSession) -> dict | None:
 
 
 async def get_chunks(model_id: uuid.UUID, db: AsyncSession) -> list[str]:
+    """
+    Return CDN URLs for all processed chunk files for a model.
+
+    For IFC models: chunks are stored as model_metadata.properties.xkt_chunks
+    For STEP/GLTF models: stored as model_metadata.properties.processed_keys
+    Falls back to s3_processed_prefix if metadata has not been written yet.
+    """
     from app.services.storage import build_cdn_url
 
     result = await db.execute(select(Model).where(Model.id == model_id))
     model = result.scalar_one_or_none()
     if not model:
         raise NotFoundException("Model not found")
+
+    # Try to read explicit processed_keys from model_metadata first
+    result = await db.execute(
+        select(ModelMetadata).where(ModelMetadata.model_id == model_id)
+    )
+    metadata = result.scalar_one_or_none()
+
+    if metadata and metadata.properties:
+        props = metadata.properties
+
+        # STEP/GLTF pipeline stores processed_keys list
+        processed_keys = props.get("processed_keys")
+        if processed_keys and isinstance(processed_keys, list):
+            return [build_cdn_url(key) for key in processed_keys]
+
+        # IFC pipeline stores xkt_chunks list
+        xkt_chunks = props.get("xkt_chunks")
+        if xkt_chunks and isinstance(xkt_chunks, list):
+            return [build_cdn_url(key) for key in xkt_chunks]
+
+    # Fallback: no explicit keys in metadata, prefix only
     if not model.s3_processed_prefix:
         return []
 

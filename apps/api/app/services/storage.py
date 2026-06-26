@@ -4,6 +4,7 @@ import uuid
 import boto3
 import filetype
 from botocore.config import Config as BotoConfig
+from celery import Celery
 
 from app.config import settings
 from app.core.exceptions import StorageException, ValidationException
@@ -39,6 +40,9 @@ def _get_s3_client():
 def validate_filename(filename: str) -> str:
     if not filename or "\x00" in filename:
         raise ValidationException("Invalid filename")
+    
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise ValidationException("Invalid filename — path traversal detected")
 
     safe_name = filename.replace("\\", "/").split("/")[-1]
 
@@ -182,16 +186,21 @@ def fetch_object_header_bytes(storage_key: str, num_bytes: int = 2048) -> bytes:
         raise StorageException(f"Failed to read uploaded file: {exc}")
 
 
-def trigger_clamav_scan(storage_key: str) -> None:
+def trigger_clamav_scan(model_id: str, storage_key: str) -> None:
     """
-    Placeholder hook — enqueues the Celery scan task.
+    Enqueues the Celery ClamAV scan task.
     Real clamd streaming scan is implemented in apps/worker/app/tasks/scan.py.
     This function only dispatches; it does not block the confirm request.
+
+    Task signature: scan_file(model_id: str, s3_key: str)
     """
-    from celery import Celery
 
     celery_client = Celery(broker=settings.REDIS_URL)
-    celery_client.send_task("app.tasks.scan.scan_file", args=[storage_key])
+    celery_client.send_task(
+        "app.tasks.scan.scan_file",
+        args=[model_id, storage_key],
+        queue="scan",
+    )
 
 
 def build_cdn_url(processed_key: str) -> str:

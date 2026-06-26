@@ -21,9 +21,34 @@ from app.services.models import (
     get_tree,
     initiate_upload,
     list_elements,
+    list_models,
 )
 
 router = APIRouter(prefix="/v1/models", tags=["models"])
+
+
+@router.get("")
+async def list_all(
+    project_id: uuid.UUID = Query(..., description="Filter models by project ID"),
+    cursor: str | None = Query(default=None, description="Pagination cursor"),
+    limit: int = Query(default=20, ge=1, le=100, description="Results per page"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    # Enforce project membership before listing
+    from app.core.authorization import get_project_member
+
+    await get_project_member(project_id, current_user, db)
+
+    items, next_cursor = await list_models(project_id, db, limit=limit, cursor=cursor)
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "data": [m.model_dump(mode="json") for m in items],
+            "meta": {"request_id": get_request_id(), "next_cursor": next_cursor},
+        },
+    )
 
 
 @router.post("/upload", status_code=201)

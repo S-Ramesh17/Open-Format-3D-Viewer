@@ -15,7 +15,8 @@ from app.schemas.annotations import (
     CommentCreate,
     CommentResponse,
 )
-
+from app.core.redis import publish_model_event
+from app.services.webhooks import dispatch_event
 
 async def create_annotation(
     model_id: uuid.UUID,
@@ -36,8 +37,7 @@ async def create_annotation(
     await db.commit()
     await db.refresh(annotation)
 
-    from app.core.redis import publish_model_event
-    from app.services.webhooks import dispatch_event
+    
 
     await publish_model_event(
         str(user_id),

@@ -7,6 +7,8 @@ from starlette.responses import Response
 from app.config import settings
 from app.core.exceptions import RateLimitException
 from app.core.redis import get_redis
+from app.core.exceptions import AppException
+from app.core.error_handlers import _error_response
 
 # Routes that do not require auth — skip rate limiting
 EXEMPT_PATHS = {
@@ -48,57 +50,65 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        # Skip exempt paths
-        if request.url.path in EXEMPT_PATHS:
-            return await call_next(request)
+        try:
+            # Skip exempt paths
+            if request.url.path in EXEMPT_PATHS:
+                return await call_next(request)
 
-        # Extract user identity from request state (set by auth dependency)
-        # For middleware-level rate limiting we use JWT sub if available
-        user_id, plan = await self._identify_request(request)
-        limit = PLAN_LIMITS.get(plan, settings.RATE_LIMIT_FREE_PER_HOUR)
+            # Extract user identity and plan
+            user_id, plan = await self._identify_request(request)
+            limit = PLAN_LIMITS.get(plan, settings.RATE_LIMIT_FREE_PER_HOUR)
 
-        # Enterprise = unlimited
-        if limit is None:
+            # Enterprise = unlimited
+            if limit is None:
+                response = await call_next(request)
+                response.headers["X-RateLimit-Limit"] = "unlimited"
+                response.headers["X-RateLimit-Remaining"] = "unlimited"
+                response.headers["X-RateLimit-Reset"] = "0"
+                return response
+
+            hour_bucket = _get_hour_bucket()
+            redis_key = _rate_limit_key(user_id, hour_bucket)
+            reset_time = hour_bucket + 3600
+
+            redis = await get_redis()
+
+            # Atomic increment
+            count = await redis.incr(redis_key)
+
+            # Set TTL on first request of this window
+            if count == 1:
+                await redis.expire(redis_key, 3600)
+
+            remaining = max(0, limit - count)
+
+            # Reject if over limit
+            if count > limit:
+                raise RateLimitException(
+                    message=f"Rate limit exceeded. Limit: {limit}/hour.",
+                    details={
+                        "limit": limit,
+                        "remaining": 0,
+                        "reset": reset_time,
+                    },
+                )
+
             response = await call_next(request)
-            response.headers["X-RateLimit-Limit"] = "unlimited"
-            response.headers["X-RateLimit-Remaining"] = "unlimited"
-            response.headers["X-RateLimit-Reset"] = "0"
+
+            # Add rate limit headers
+            response.headers["X-RateLimit-Limit"] = str(limit)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+            response.headers["X-RateLimit-Reset"] = str(reset_time)
+
             return response
 
-        hour_bucket = _get_hour_bucket()
-        redis_key = _rate_limit_key(user_id, hour_bucket)
-        reset_time = hour_bucket + 3600
-
-        redis = await get_redis()
-
-        # Atomic increment
-        count = await redis.incr(redis_key)
-
-        # Set TTL on first request of this window
-        if count == 1:
-            await redis.expire(redis_key, 3600)
-
-        remaining = max(0, limit - count)
-
-        # Reject if over limit
-        if count > limit:
-            raise RateLimitException(
-                message=f"Rate limit exceeded. Limit: {limit}/hour.",
-                details={
-                    "limit": limit,
-                    "remaining": 0,
-                    "reset": reset_time,
-                },
+        except AppException as exc:
+            return _error_response(
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                message=exc.message,
+                details=exc.details,
             )
-
-        response = await call_next(request)
-
-        # Add rate limit headers to every response
-        response.headers["X-RateLimit-Limit"] = str(limit)
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
-        response.headers["X-RateLimit-Reset"] = str(reset_time)
-
-        return response
 
     async def _identify_request(self, request: Request) -> tuple[str, str]:
         """
