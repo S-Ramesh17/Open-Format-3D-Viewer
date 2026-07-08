@@ -1,3 +1,4 @@
+import base64
 import uuid
 from datetime import datetime, timezone
 
@@ -17,6 +18,23 @@ from app.schemas.annotations import (
 )
 from app.core.redis import publish_model_event
 from app.services.webhooks import dispatch_event
+
+
+# ── Cursor helpers (identical pattern to services/projects.py) ──────────────
+
+def _encode_cursor(created_at: datetime, annotation_id: uuid.UUID) -> str:
+    raw = f"{created_at.isoformat()}|{annotation_id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        ts_str, id_str = raw.split("|")
+        return datetime.fromisoformat(ts_str), uuid.UUID(id_str)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise ValueError("Invalid pagination cursor") from exc
+
 
 async def create_annotation(
     model_id: uuid.UUID,
@@ -54,15 +72,48 @@ async def list_annotations(
     model_id: uuid.UUID,
     db: AsyncSession,
     status_filter: str | None = None,
-) -> list[AnnotationResponse]:
+    limit: int = 20,
+    cursor: str | None = None,
+) -> tuple[list[AnnotationResponse], str | None]:
+    """
+    List annotations for a model with cursor pagination.
+    Returns (annotations, next_cursor). next_cursor is None when exhausted.
+    Ordered by created_at DESC, id DESC for stable pagination — identical
+    pattern to services/projects.py::list_projects.
+    """
     query = select(Annotation).where(Annotation.model_id == model_id)
     if status_filter:
         query = query.where(Annotation.status == status_filter)
-    query = query.order_by(Annotation.created_at.desc())
+
+    if cursor:
+        cursor_ts, cursor_id = _decode_cursor(cursor)
+        query = query.where(
+            (Annotation.created_at < cursor_ts)
+            | (
+                (Annotation.created_at == cursor_ts)
+                & (Annotation.id < cursor_id)
+            )
+        )
+
+    query = query.order_by(
+        Annotation.created_at.desc(),
+        Annotation.id.desc(),
+    ).limit(limit + 1)
 
     result = await db.execute(query)
     rows = result.scalars().all()
-    return [AnnotationResponse.model_validate(r) for r in rows]
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    annotations = [AnnotationResponse.model_validate(r) for r in rows]
+
+    next_cursor = None
+    if has_more and rows:
+        last = rows[-1]
+        next_cursor = _encode_cursor(last.created_at, last.id)
+
+    return annotations, next_cursor
 
 
 async def get_annotation(annotation_id: uuid.UUID, db: AsyncSession) -> Annotation:

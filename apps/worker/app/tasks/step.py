@@ -16,31 +16,34 @@ Flow:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import subprocess
 import tempfile
-import uuid
 from pathlib import Path
 from typing import Any
 
 from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.config import settings
 from app.tasks.common import (
-    GLTF_CHUNK_MAX_BYTES,
+    dispatch_webhook_event,
     download_raw_file,
     get_model_row,
     get_sync_engine,
-    publish_model_failed,
+    publish_model_progress,
     publish_model_ready,
     run_node_tool,
     split_binary_chunks,
     update_model_status,
     upsert_model_metadata,
     upload_processed_file,
+)
+from app.tasks.error_handler import (
+    assert_file_size,
+    handle_task_failure,
+    is_retryable,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,8 +126,6 @@ def _export_gltf(shape: Any, output_path: str) -> None:
         from OCC.Core.RWGltf import RWGltf_CafWriter                # type: ignore
         from OCC.Core.TDocStd import TDocStd_Document                # type: ignore
         from OCC.Core.TCollection import TCollection_ExtendedString   # type: ignore
-        from OCC.Core.BRep import BRep_Builder                        # type: ignore
-        from OCC.Core.TopoDS import TopoDS_Compound                   # type: ignore
         from OCC.Core.XCAFDoc import XCAFDoc_DocumentTool             # type: ignore
         from OCC.Core.XCAFApp import XCAFApp_Application              # type: ignore
         from OCC.Core.TDF import TDF_LabelSequence                    # type: ignore
@@ -168,7 +169,7 @@ def _compress_with_draco(gltf_path: str, output_dir: str, compression_level: int
         "-i", gltf_path,
         "-o", str(glb_out),
         "--draco.compressMeshes",
-        f"--draco.compressionLevel", str(compression_level),
+        "--draco.compressionLevel", str(compression_level),
     ]
 
     try:
@@ -196,7 +197,6 @@ def _compress_with_draco(gltf_path: str, output_dir: str, compression_level: int
 def _collect_step_geometry_stats(shape: Any) -> dict:
     """Return basic shape statistics for metadata storage."""
     try:
-        from OCC.Core.BRep import BRep_Tool            # type: ignore
         from OCC.Core.TopExp import TopExp_Explorer     # type: ignore
         from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX  # type: ignore
 
@@ -253,6 +253,14 @@ def process_step(self: Task, model_id: str) -> dict:
         logger.error("[STEP] Model %s not found in DB", model_id)
         return {"error": "model_not_found", "model_id": model_id}
 
+    # ── 1b. Idempotency guard — skip if already terminal (redelivery) ──────
+    if model.get("status") in ("ready", "failed"):
+        logger.info(
+            "[STEP] model_id=%s already in terminal status=%s — skipping redelivered task",
+            model_id, model.get("status"),
+        )
+        return {"model_id": model_id, "status": model.get("status"), "skipped": "already_processed"}
+
     user_id = str(model["uploaded_by"])
     s3_raw_key = model["s3_raw_key"]
 
@@ -266,37 +274,50 @@ def process_step(self: Task, model_id: str) -> dict:
         out_dir = os.path.join(tmpdir, "output")
         os.makedirs(out_dir, exist_ok=True)
 
+        stage = "init"
         try:
+            stage = "download"
             # ── 2. Download from S3 ────────────────────────────────────────
             download_raw_file(s3_raw_key, step_local)
+            publish_model_progress(user_id, model_id, 10, "download")
+            
 
+            stage = "size_check"
             # ── 2b. 500 MB file size guard ─────────────────────────────────
-            from app.tasks.error_handler import assert_file_size
             assert_file_size(step_local)
 
+            stage = "parse"
             # ── 3. Read STEP ───────────────────────────────────────────────
             shape = _read_step(step_local)
+            publish_model_progress(user_id, model_id, 25, "parse")
 
+            stage = "mesh"
             # ── 4. Mesh geometry ───────────────────────────────────────────
             _mesh_shape(shape, linear_deflection=0.1, angular_deflection=0.5)
 
             # ── 5. Geometry stats ──────────────────────────────────────────
             geom_stats = _collect_step_geometry_stats(shape)
+            publish_model_progress(user_id, model_id, 50, "extract")
             logger.info("[STEP] Geometry stats: %s", geom_stats)
 
+            stage = "export"
             # ── 6. Export STEP → GLTF ──────────────────────────────────────
             gltf_path = os.path.join(out_dir, "model.gltf")
             _export_gltf(shape, gltf_path)
 
+            stage = "compress"
             # ── 7. Draco compression GLTF → GLB ───────────────────────────
             compressed_path = _compress_with_draco(gltf_path, out_dir, compression_level=7)
+            publish_model_progress(user_id, model_id, 75, "convert")
 
+            stage = "split"
             # ── 8. Split if > 32 MB ────────────────────────────────────────
             out_ext = Path(compressed_path).suffix
             out_stem = Path(compressed_path).stem
             chunks = split_binary_chunks(compressed_path, out_dir, out_stem, out_ext)
 
             # ── 9. Upload chunks to S3 ─────────────────────────────────────
+            stage = "upload"
             processed_prefix = f"processed/{model_id}"
             uploaded_keys: list[str] = []
 
@@ -308,8 +329,10 @@ def process_step(self: Task, model_id: str) -> dict:
                 uploaded_keys.append(s3_key)
 
             logger.info("[STEP] Uploaded %d chunk(s)", len(uploaded_keys))
+            publish_model_progress(user_id, model_id, 90, "upload")
 
             # ── 10. Persist metadata ───────────────────────────────────────
+            stage = "metadata"
             upsert_model_metadata(
                 engine,
                 model_id,
@@ -326,6 +349,7 @@ def process_step(self: Task, model_id: str) -> dict:
             )
 
             # ── 11. Update model status → ready ───────────────────────────
+            stage = "finalize"
             update_model_status(
                 engine,
                 model_id,
@@ -335,6 +359,8 @@ def process_step(self: Task, model_id: str) -> dict:
 
             # ── 12. Publish Redis event ────────────────────────────────────
             publish_model_ready(user_id, model_id)
+            publish_model_progress(user_id, model_id, 100, "ready")
+            dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
 
             logger.info("[STEP] Processing complete for model_id=%s", model_id)
             return {
@@ -346,12 +372,15 @@ def process_step(self: Task, model_id: str) -> dict:
                 "geometry": geom_stats,
             }
 
+        except SoftTimeLimitExceeded:
+            logger.error("[STEP] Soft time limit exceeded at stage=%s", stage)
+            return handle_task_failure(
+                engine, model_id, user_id, stage, SoftTimeLimitExceeded("soft time limit")
+            )
+
         except Exception as exc:
-            logger.exception("[STEP] Processing failed for model_id=%s: %s", model_id, exc)
-            update_model_status(engine, model_id, "failed", error_message=str(exc))
-            publish_model_failed(user_id, model_id, str(exc))
-
-            if isinstance(exc, (ConnectionError, OSError)):
+            logger.exception("[STEP] Failed at stage=%s for model_id=%s", stage, model_id)
+            result = handle_task_failure(engine, model_id, user_id, stage, exc)
+            if is_retryable(exc):
                 raise self.retry(exc=exc)
-
-            return {"model_id": model_id, "status": "failed", "error": str(exc)[:500]}
+            return result

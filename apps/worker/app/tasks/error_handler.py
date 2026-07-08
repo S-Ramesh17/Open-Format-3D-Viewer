@@ -126,6 +126,18 @@ def handle_task_failure(
             redis_exc,
         )
 
+    try:
+        from app.tasks.common import dispatch_webhook_event
+        dispatch_webhook_event(
+            engine, "model.failed", {"model_id": model_id, "error": error_detail}, user_id
+        )
+    except Exception as webhook_exc:
+        logger.error(
+            "Failed to dispatch model.failed webhook event (model_id=%s): %s",
+            model_id,
+            webhook_exc,
+        )
+
     return {
         "model_id": model_id,
         "status": "failed",

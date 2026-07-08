@@ -40,4 +40,5 @@ class Annotation(Base):
     __table_args__ = (
         Index("ix_annotations_model_id", "model_id"),
         Index("ix_annotations_created_by", "created_by"),
+        Index("ix_annotations_model_status", "model_id", "status"),
     )

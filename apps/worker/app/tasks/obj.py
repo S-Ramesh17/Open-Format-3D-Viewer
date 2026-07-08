@@ -27,10 +27,12 @@ from celery.exceptions import SoftTimeLimitExceeded
 from app.celery_app import celery_app
 from app.config import settings
 from app.tasks.common import (
-    GLTF_CHUNK_MAX_BYTES,
+    dispatch_webhook_event,
     download_raw_file,
     get_model_row,
     get_sync_engine,
+    publish_model_progress,
+    publish_model_ready,
     run_node_tool,
     split_binary_chunks,
     update_model_status,
@@ -38,7 +40,6 @@ from app.tasks.common import (
     upsert_model_metadata,
 )
 from app.tasks.error_handler import (
-    FileTooLargeError,
     assert_file_size,
     handle_task_failure,
     is_retryable,
@@ -79,7 +80,7 @@ def _load_obj(obj_path: str) -> any:
 
     # Check for empty geometry
     if hasattr(mesh, "vertices") and len(mesh.vertices) == 0:
-        raise RuntimeError(f"OBJ loaded with 0 vertices — file may be empty or corrupt")
+        raise RuntimeError("OBJ loaded with 0 vertices — file may be empty or corrupt")
 
     vertex_count = len(mesh.vertices) if hasattr(mesh, "vertices") else "?"
     face_count = len(mesh.faces) if hasattr(mesh, "faces") else "?"
@@ -107,7 +108,7 @@ def _export_to_gltf(mesh: any, output_path: str) -> None:
     else:
         scene = mesh
 
-    exported = scene.export(output_path, file_type="glb")
+    scene.export(output_path, file_type="glb")
 
     if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
         raise RuntimeError(f"trimesh export produced empty or missing file at {output_path}")
@@ -190,6 +191,14 @@ def process_obj(self: Task, model_id: str) -> dict:
         logger.error("[OBJ] Model %s not found in DB", model_id)
         return {"error": "model_not_found", "model_id": model_id}
 
+    # ── Idempotency guard — skip if already terminal (redelivery) ──────────
+    if model.get("status") in ("ready", "failed"):
+        logger.info(
+            "[OBJ] model_id=%s already in terminal status=%s — skipping redelivered task",
+            model_id, model.get("status"),
+        )
+        return {"model_id": model_id, "status": model.get("status"), "skipped": "already_processed"}
+
     user_id = str(model["uploaded_by"])
     s3_raw_key = model["s3_raw_key"]
 
@@ -207,6 +216,7 @@ def process_obj(self: Task, model_id: str) -> dict:
             # ── Download ────────────────────────────────────────────────────
             stage = "download"
             download_raw_file(s3_raw_key, obj_local)
+            publish_model_progress(user_id, model_id, 10, "download")
 
             # Try to download a companion .mtl file (same key, different ext)
             # Failure is silently ignored — mesh loads without materials
@@ -273,8 +283,8 @@ def process_obj(self: Task, model_id: str) -> dict:
             # ── Update status + publish ────────────────────────────────────
             stage = "finalize"
             update_model_status(engine, model_id, "ready", s3_processed_prefix=processed_prefix)
-            from app.tasks.common import publish_model_ready
             publish_model_ready(user_id, model_id)
+            dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
 
             logger.info("[OBJ] Processing complete for model_id=%s", model_id)
             return {

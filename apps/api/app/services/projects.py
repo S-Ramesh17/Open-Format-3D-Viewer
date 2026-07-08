@@ -2,14 +2,19 @@ import base64
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictException, NotFoundException
+from app.core.exceptions import NotFoundException
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
-from app.schemas.projects import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.schemas.projects import (
+    ProjectCreate,
+    ProjectMemberResponse,
+    ProjectResponse,
+    ProjectUpdate,
+)
 
 
 # ── Cursor helpers ───────────────────────────────────────────────────────────
@@ -113,6 +118,21 @@ async def list_projects(
         next_cursor = _encode_cursor(last.Project.created_at, last.Project.id)
 
     return projects, next_cursor
+
+
+async def list_project_members(
+    project_id: uuid.UUID,
+    db: AsyncSession,
+) -> list[ProjectMemberResponse]:
+    """
+    List all members of a project with their roles.
+    Caller must already be verified as a project member (enforced at router level).
+    """
+    result = await db.execute(
+        select(ProjectMember).where(ProjectMember.project_id == project_id)
+    )
+    rows = result.scalars().all()
+    return [ProjectMemberResponse.model_validate(r) for r in rows]
 
 
 async def get_project(

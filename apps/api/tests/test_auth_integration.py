@@ -63,7 +63,7 @@ class TestLogin:
             json={"email": unique_email, "password": "wrongpassword"},
         )
         assert resp.status_code == 401
-        assert resp.json()["error"]["code"] == "AUTHENTICATION_ERROR"
+        assert resp.json()["error"]["code"] == "UNAUTHORIZED"
 
     async def test_login_validation_failure_missing_field(self, client: AsyncClient):
         resp = await client.post("/v1/auth/login", json={"email": "user@example.com"})
@@ -129,4 +129,4 @@ class TestMe:
     async def test_me_without_auth_fails(self, client: AsyncClient):
         resp = await client.get("/v1/auth/me")
         assert resp.status_code == 401
-        assert resp.json()["error"]["code"] == "AUTHENTICATION_ERROR"
+        assert resp.json()["error"]["code"] == "UNAUTHORIZED"

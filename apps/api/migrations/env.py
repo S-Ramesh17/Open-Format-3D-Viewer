@@ -1,10 +1,10 @@
 from logging.config import fileConfig
 from app.config import settings
 
-from sqlalchemy import engine_from_config, pool, text
+from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.db.base import Base
-from app.models import *
+from app.models import Annotation as Annotation, AnnotationComment as AnnotationComment, ApiKey as ApiKey, Model as Model, ModelElement as ModelElement, ModelMetadata as ModelMetadata, Project as Project, ProjectMember as ProjectMember, User as User, Webhook as Webhook
 
 config = context.config
 config.set_main_option(

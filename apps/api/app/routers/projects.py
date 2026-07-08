@@ -5,17 +5,18 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import envelope
-from app.core.authorization import require_role
+from app.core.authorization import get_project_member, require_role
 from app.core.dependencies import get_current_user
 from app.core.request_id import get_request_id
 from app.db.engine import get_db
 from app.models.project_member import ProjectMember
 from app.models.user import User
-from app.schemas.projects import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.schemas.projects import ProjectCreate, ProjectUpdate
 from app.services.projects import (
     create_project,
     delete_project,
     get_project,
+    list_project_members,
     list_projects,
     update_project,
 )
@@ -62,6 +63,19 @@ async def get_one(
 ) -> JSONResponse:
     project = await get_project(project_id, current_user, db)
     return envelope(project.model_dump(mode="json"))
+
+
+@router.get("/{project_id}/members")
+async def list_members(
+    project_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    # Membership required to view the member list
+    await get_project_member(project_id, current_user, db)
+
+    members = await list_project_members(project_id, db)
+    return envelope([m.model_dump(mode="json") for m in members])
 
 
 @router.patch("/{project_id}")

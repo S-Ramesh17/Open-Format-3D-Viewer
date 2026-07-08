@@ -10,6 +10,10 @@ class WorkerSettings(BaseSettings):
     S3_RAW_BUCKET: str = ""
     S3_PROCESSED_BUCKET: str = ""
     CDN_BASE_URL: str = ""
+    # TEMP LOCAL STORAGE — set to "s3" once AWS credentials are available
+    STORAGE_PROVIDER: str = "s3"  # "s3" | "local"
+    LOCAL_STORAGE_PATH: str = "/tmp/openformat_uploads"
+    # END TEMP LOCAL STORAGE
     ENVIRONMENT: str = "development"
     SENTRY_DSN: str = ""
 

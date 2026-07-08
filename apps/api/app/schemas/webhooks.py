@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
-
 from pydantic import BaseModel, Field, field_validator
+
+from app.core.ssrf import validate_webhook_url
+
 
 ALLOWED_EVENTS = {
     "model.ready",
@@ -19,9 +21,7 @@ class WebhookCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def url_https(cls, v: str) -> str:
-        if not v.startswith("https://"):
-            raise ValueError("Webhook URL must use https://")
-        return v
+        return validate_webhook_url(v)
 
     @field_validator("events")
     @classmethod
@@ -36,6 +36,13 @@ class WebhookUpdate(BaseModel):
     url: str | None = Field(default=None, max_length=2000)
     events: list[str] | None = Field(default=None)
     is_active: bool | None = Field(default=None)
+
+    @field_validator("url")
+    @classmethod
+    def url_https(cls, v: str | None) -> str | None:
+        if v is not None:
+            return validate_webhook_url(v)
+        return v
 
     @field_validator("events")
     @classmethod

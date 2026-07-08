@@ -38,6 +38,9 @@ redis             = "^5.2.0"
 # Observability
 sentry-sdk        = { extras = ["fastapi"], version = "^2.19.0" }
 
+prometheus-fastapi-instrumentator = "^7.1.0"
+prometheus-client              = "^0.21.0"
+
 # Utilities
 pydantic          = { extras = ["email"], version = "^2.10.0" }
 pydantic-settings = "^2.7.0"
@@ -55,6 +58,11 @@ httpx             = "^0.28.0"
 black             = "^24.10.0"
 ruff              = "^0.8.0"
 mypy              = "^1.13.0"
+
+[tool.pytest.ini_options]
+asyncio_mode  = "auto"
+pythonpath    = ["."]
+testpaths     = ["tests"]
 
 [build-system]
 requires      = ["poetry-core>=1.9.0"]

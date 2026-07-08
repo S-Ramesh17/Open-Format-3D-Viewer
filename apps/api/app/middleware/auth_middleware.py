@@ -7,9 +7,12 @@ from app.core.cookies import ACCESS_TOKEN_COOKIE
 from app.core.request_id import get_request_id
 from app.core.security import decode_token
 
-# Routes under /v1/* that do NOT require authentication
 EXCLUDED_PREFIXES = (
     "/v1/auth/",
+)
+# Routes that are entirely public (no auth even for GET)
+EXCLUDED_EXACT_PREFIXES = (
+    "/v1/share/",  # GET /v1/share/{token} is public; other methods still require auth below
 )
 
 # Exact-match excluded paths (supports path params via simple suffix check)
@@ -24,7 +27,12 @@ def _is_excluded(path: str) -> bool:
 
     if any(path.startswith(p) for p in EXCLUDED_PREFIXES):
         return True
-
+    
+    import re as _re
+    if _re.match(r'^/v1/share/[^/]+$', path) and path != '/v1/share':
+        # Only GET is public; POST/DELETE still require auth (handled by FastAPI deps)
+        return True
+    
     if any(path.endswith(s) for s in EXCLUDED_SUFFIX_PATTERNS):
         return True
 
@@ -92,7 +100,7 @@ def _unauthorized(message: str) -> JSONResponse:
         status_code=401,
         content={
             "error": {
-                "code": "AUTHENTICATION_ERROR",
+                "code": "UNAUTHORIZED",
                 "message": message,
                 "details": {},
             },

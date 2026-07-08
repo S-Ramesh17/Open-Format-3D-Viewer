@@ -27,17 +27,31 @@ class ValidationException(AppException):
     message = "Request validation failed"
 
 
+class FileTooLargeException(ValidationException):
+    """Uploaded or declared file size exceeds the maximum allowed."""
+    status_code = 422
+    error_code = "FILE_TOO_LARGE"
+    message = "File exceeds the maximum allowed size"
+
+
+class UnsupportedFormatException(ValidationException):
+    """File extension or MIME type is not a supported 3D format."""
+    status_code = 422
+    error_code = "UNSUPPORTED_FORMAT"
+    message = "File format is not supported"
+
+
 class AuthenticationException(AppException):
     """Missing, invalid, or expired credentials."""
     status_code = 401
-    error_code = "AUTHENTICATION_ERROR"
+    error_code = "UNAUTHORIZED"
     message = "Authentication required"
 
 
 class AuthorizationException(AppException):
     """Authenticated but not permitted to perform this action."""
     status_code = 403
-    error_code = "AUTHORIZATION_ERROR"
+    error_code = "FORBIDDEN"
     message = "You do not have permission to perform this action"
 
 
@@ -58,7 +72,7 @@ class ConflictException(AppException):
 class RateLimitException(AppException):
     """Too many requests — rate limit exceeded."""
     status_code = 429
-    error_code = "RATE_LIMIT_EXCEEDED"
+    error_code = "RATE_LIMITED"
     message = "Rate limit exceeded"
 
 

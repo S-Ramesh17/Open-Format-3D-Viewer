@@ -1,7 +1,6 @@
 import io
 import uuid
 import zipfile
-from datetime import datetime
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from sqlalchemy import select
@@ -29,19 +28,29 @@ async def export_bcf(model_id: uuid.UUID, db: AsyncSession) -> bytes:
     )
     annotations = result.scalars().all()
 
+    # Batch-fetch comments for every annotation in a single query instead of
+    # one query per annotation (was N+1 inside the export loop below), then
+    # group them in Python. Ordering per-annotation is preserved.
+    annotation_ids = [annotation.id for annotation in annotations]
+    comments_by_annotation: dict[uuid.UUID, list[AnnotationComment]] = {
+        annotation_id: [] for annotation_id in annotation_ids
+    }
+    if annotation_ids:
+        result = await db.execute(
+            select(AnnotationComment)
+            .where(AnnotationComment.annotation_id.in_(annotation_ids))
+            .order_by(AnnotationComment.annotation_id, AnnotationComment.created_at.asc())
+        )
+        for comment in result.scalars().all():
+            comments_by_annotation[comment.annotation_id].append(comment)
+
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("bcf.version", '<?xml version="1.0"?>\n<Version VersionId="2.1"/>')
 
         for annotation in annotations:
             topic_guid = str(annotation.id)
-
-            result = await db.execute(
-                select(AnnotationComment)
-                .where(AnnotationComment.annotation_id == annotation.id)
-                .order_by(AnnotationComment.created_at.asc())
-            )
-            comments = result.scalars().all()
+            comments = comments_by_annotation[annotation.id]
 
             markup_xml = _build_markup_xml(annotation, comments)
             zf.writestr(f"{topic_guid}/markup.bcf", markup_xml)
@@ -74,7 +83,7 @@ def _build_markup_xml(annotation: Annotation, comments: list[AnnotationComment])
         date_el.text = comment.created_at.isoformat()
         comment_text_el = SubElement(comment_el, "Comment")
         comment_text_el.text = comment.body
-        topic_ref = SubElement(comment_el, "Topic", {"Guid": str(annotation.id)})
+        SubElement(comment_el, "Topic", {"Guid": str(annotation.id)})
 
     xml_bytes = tostring(root, encoding="utf-8", xml_declaration=True)
     return xml_bytes.decode("utf-8")

@@ -117,47 +117,33 @@ class TestModelUpload:
 # ---------------------------------------------------------------------------
 
 class TestModelConfirm:
-    @patch("app.services.models.trigger_clamav_scan")
-    @patch("app.services.models._enqueue_processing_task")
-    @patch("app.services.models.validate_mime_type_from_bytes")
-    @patch("app.services.models.fetch_object_header_bytes")
-    @patch("app.services.models.verify_object_exists")
-    @patch("app.services.models.generate_presigned_upload_url")
     async def test_confirm_transitions_to_processing(
         self,
-        mock_url,
-        mock_verify,
-        mock_header,
-        mock_mime,
-        mock_enqueue,
-        mock_scan,
         client: AsyncClient,
         unique_email: str,
     ):
-        mock_url.return_value = "https://s3.example.com/url"
-        mock_verify.return_value = {"size_bytes": 1024 * 100, "content_type": "application/octet-stream"}
-        mock_header.return_value = b"\x00" * 256
-        mock_mime.return_value = "application/octet-stream"
-
-        project_id = await _setup_user_and_project(client, unique_email)
-
-        upload_resp = await client.post(
-            "/v1/models/upload",
-            json={**VALID_UPLOAD_PAYLOAD, "project_id": project_id},
-        )
-        model_id = upload_resp.json()["data"]["model_id"]
-
-        with patch("app.services.models.publish_model_event", new_callable=AsyncMock), \
+        with patch("app.services.models.generate_presigned_upload_url", return_value="https://s3.example.com/url"), \
+             patch("app.services.models.verify_object_exists", return_value={"size_bytes": 1024 * 100, "content_type": "application/octet-stream"}), \
+             patch("app.services.models.fetch_object_header_bytes", return_value=b"\x00" * 256), \
+             patch("app.services.models.validate_mime_type_from_bytes", return_value="application/octet-stream"), \
+             patch("app.services.storage.trigger_clamav_scan"), \
+             patch("app.services.models.publish_model_event", new_callable=AsyncMock), \
              patch("app.services.models.dispatch_event", new_callable=AsyncMock):
+
+            project_id = await _setup_user_and_project(client, unique_email)
+
+            upload_resp = await client.post(
+                "/v1/models/upload",
+                json={**VALID_UPLOAD_PAYLOAD, "project_id": project_id},
+            )
+            model_id = upload_resp.json()["data"]["model_id"]
+
             confirm_resp = await client.post(f"/v1/models/{model_id}/confirm")
 
         assert confirm_resp.status_code == 200
-        body = confirm_resp.json()
-        assert body["data"]["status"] == "processing"
+        assert confirm_resp.json()["data"]["status"] == "processing"
 
-    async def test_confirm_nonexistent_model_returns_404(
-        self, client: AsyncClient, unique_email: str
-    ):
+    async def test_confirm_model_not_found(self, client: AsyncClient, unique_email: str):
         await client.post(
             "/v1/auth/register",
             json={"email": unique_email, "password": "testpass123"},
@@ -169,45 +155,32 @@ class TestModelConfirm:
         resp = await client.post(f"/v1/models/{uuid.uuid4()}/confirm")
         assert resp.status_code == 401
 
-    @patch("app.services.models.trigger_clamav_scan")
-    @patch("app.services.models._enqueue_processing_task")
-    @patch("app.services.models.validate_mime_type_from_bytes")
-    @patch("app.services.models.fetch_object_header_bytes")
-    @patch("app.services.models.verify_object_exists")
-    @patch("app.services.models.generate_presigned_upload_url")
     async def test_confirm_calls_clamav_with_model_id_and_key(
         self,
-        mock_url,
-        mock_verify,
-        mock_header,
-        mock_mime,
-        mock_enqueue,
-        mock_scan,
         client: AsyncClient,
         unique_email: str,
     ):
         """Regression test: scan task receives both model_id AND storage_key."""
-        mock_url.return_value = "https://s3.example.com/url"
-        mock_verify.return_value = {"size_bytes": 1024 * 100, "content_type": "application/octet-stream"}
-        mock_header.return_value = b"\x00" * 256
-        mock_mime.return_value = "application/octet-stream"
-
-        project_id = await _setup_user_and_project(client, unique_email)
-
-        upload_resp = await client.post(
-            "/v1/models/upload",
-            json={**VALID_UPLOAD_PAYLOAD, "project_id": project_id},
-        )
-        model_id = upload_resp.json()["data"]["model_id"]
-        storage_key = upload_resp.json()["data"]["storage_key"]
-
-        with patch("app.services.models.publish_model_event", new_callable=AsyncMock), \
+        with patch("app.services.models.generate_presigned_upload_url", return_value="https://s3.example.com/url"), \
+             patch("app.services.models.verify_object_exists", return_value={"size_bytes": 1024 * 100, "content_type": "application/octet-stream"}), \
+             patch("app.services.models.fetch_object_header_bytes", return_value=b"\x00" * 256), \
+             patch("app.services.models.validate_mime_type_from_bytes", return_value="application/octet-stream"), \
+             patch("app.services.storage.trigger_clamav_scan") as mock_scan, \
+             patch("app.services.models.publish_model_event", new_callable=AsyncMock), \
              patch("app.services.models.dispatch_event", new_callable=AsyncMock):
+
+            project_id = await _setup_user_and_project(client, unique_email)
+
+            upload_resp = await client.post(
+                "/v1/models/upload",
+                json={**VALID_UPLOAD_PAYLOAD, "project_id": project_id},
+            )
+            model_id = upload_resp.json()["data"]["model_id"]
+            storage_key = upload_resp.json()["data"]["storage_key"]
+
             await client.post(f"/v1/models/{model_id}/confirm")
 
-        mock_scan.assert_called_once_with(model_id, storage_key)
-
-
+            mock_scan.assert_called_once_with(model_id, storage_key)
 # ---------------------------------------------------------------------------
 # List models
 # ---------------------------------------------------------------------------

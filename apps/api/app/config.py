@@ -63,6 +63,11 @@ class Settings(BaseSettings):
 
     # Upload limits
     MAX_UPLOAD_SIZE_BYTES: int = 500 * 1024 * 1024  # 500MB
+    
+    # Storage provider
+    # TEMP LOCAL STORAGE — set to "s3" once AWS credentials are available
+    STORAGE_PROVIDER: str = "s3"  # "s3" | "local"
+    LOCAL_STORAGE_PATH: str = "/tmp/openformat_uploads"
 
     # Observability
     SENTRY_DSN: str = ""

@@ -285,3 +285,84 @@ class TestAnnotationFiltering:
         assert resp.status_code == 200
         statuses = [a["status"] for a in resp.json()["data"]]
         assert all(s == "resolved" for s in statuses)
+
+
+# ---------------------------------------------------------------------------
+# Pagination
+# ---------------------------------------------------------------------------
+
+class TestAnnotationPagination:
+    async def test_list_returns_paginated_envelope(
+        self, client: AsyncClient, unique_email: str
+    ):
+        """List endpoint returns meta.next_cursor like projects/models/elements."""
+        project_id, model_id = await _setup_user_project_model(client, unique_email)
+
+        with patch("app.services.annotations.publish_model_event", new_callable=AsyncMock), \
+             patch("app.services.annotations.dispatch_event", new_callable=AsyncMock):
+            await client.post(f"/v1/models/{model_id}/annotations", json=VALID_ANNOTATION)
+
+        resp = await client.get(f"/v1/models/{model_id}/annotations")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "data" in body
+        assert "meta" in body
+        assert "request_id" in body["meta"]
+        assert "next_cursor" in body["meta"]
+
+    async def test_list_respects_limit(self, client: AsyncClient, unique_email: str):
+        project_id, model_id = await _setup_user_project_model(client, unique_email)
+
+        with patch("app.services.annotations.publish_model_event", new_callable=AsyncMock), \
+             patch("app.services.annotations.dispatch_event", new_callable=AsyncMock):
+            for i in range(3):
+                await client.post(
+                    f"/v1/models/{model_id}/annotations",
+                    json={**VALID_ANNOTATION, "title": f"Annotation {i}"},
+                )
+
+        resp = await client.get(f"/v1/models/{model_id}/annotations?limit=2")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["data"]) == 2
+        assert body["meta"]["next_cursor"] is not None
+
+    async def test_list_cursor_pagination_no_duplicates(
+        self, client: AsyncClient, unique_email: str
+    ):
+        """Paging through with cursor returns all items exactly once."""
+        project_id, model_id = await _setup_user_project_model(client, unique_email)
+
+        with patch("app.services.annotations.publish_model_event", new_callable=AsyncMock), \
+             patch("app.services.annotations.dispatch_event", new_callable=AsyncMock):
+            for i in range(5):
+                await client.post(
+                    f"/v1/models/{model_id}/annotations",
+                    json={**VALID_ANNOTATION, "title": f"Annotation {i}"},
+                )
+
+        seen_ids = set()
+        cursor = None
+        for _ in range(10):  # safety bound
+            url = f"/v1/models/{model_id}/annotations?limit=2"
+            if cursor:
+                url += f"&cursor={cursor}"
+            resp = await client.get(url)
+            body = resp.json()
+            for item in body["data"]:
+                assert item["id"] not in seen_ids, "duplicate item across pages"
+                seen_ids.add(item["id"])
+            cursor = body["meta"]["next_cursor"]
+            if cursor is None:
+                break
+
+        assert len(seen_ids) == 5
+
+    async def test_list_no_cursor_returns_first_page(
+        self, client: AsyncClient, unique_email: str
+    ):
+        project_id, model_id = await _setup_user_project_model(client, unique_email)
+        resp = await client.get(f"/v1/models/{model_id}/annotations")
+        assert resp.status_code == 200
+        assert resp.json()["data"] == []
+        assert resp.json()["meta"]["next_cursor"] is None

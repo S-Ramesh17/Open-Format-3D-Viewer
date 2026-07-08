@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import uuid as uuid_module
 import zipfile
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -46,7 +47,17 @@ def _s3_client():
 
 
 def _upload_bcf(archive_bytes: bytes, s3_key: str) -> None:
-    """Upload BCF ZIP archive to the processed S3 bucket."""
+    """Upload BCF ZIP archive to processed storage (S3 or local)."""
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        local_dest = os.path.join(settings.LOCAL_STORAGE_PATH, "processed", s3_key)
+        os.makedirs(os.path.dirname(local_dest), exist_ok=True)
+        with open(local_dest, "wb") as f:
+            f.write(archive_bytes)
+        logger.info("[BCF][LOCAL] Saved BCF → %s (%d bytes)", local_dest, len(archive_bytes))
+        return
+    # END TEMP LOCAL STORAGE
+
     s3 = _s3_client()
     logger.info("[BCF] Uploading %d bytes → s3://%s/%s", len(archive_bytes), settings.S3_PROCESSED_BUCKET, s3_key)
     s3.put_object(
@@ -56,9 +67,13 @@ def _upload_bcf(archive_bytes: bytes, s3_key: str) -> None:
         ContentType="application/zip",
     )
 
-
 def _presigned_download_url(s3_key: str, expires_in: int = 3600) -> str:
-    """Generate a presigned GET URL for the BCF archive."""
+    """Generate a download URL for the BCF archive."""
+    # TEMP LOCAL STORAGE — API serves local files via /files/ endpoint
+    if settings.STORAGE_PROVIDER == "local":
+        return f"/files/{s3_key}"
+    # END TEMP LOCAL STORAGE
+
     s3 = _s3_client()
     try:
         return s3.generate_presigned_url(
@@ -68,9 +83,7 @@ def _presigned_download_url(s3_key: str, expires_in: int = 3600) -> str:
         )
     except Exception as exc:
         logger.error("[BCF] Failed to generate presigned URL: %s", exc)
-        # Fall back to CDN URL
         return f"{settings.CDN_BASE_URL.rstrip('/')}/{s3_key}"
-
 
 # ---------------------------------------------------------------------------
 # PostgreSQL helpers (sync)

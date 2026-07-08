@@ -16,6 +16,17 @@ import jwt from 'jsonwebtoken';
 import Redis from 'ioredis';
 import 'dotenv/config';
 
+import {
+  connectedClients,
+  messagesSent,
+  messagesDropped,
+  redisEventsReceived,
+  redisPublishFailures,
+  reconnections,
+  roomBroadcasts,
+  cursorMovesThrottled,
+  startMetricsServer,
+} from './metrics.js';
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -25,7 +36,7 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379/0';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
-
+const CURSOR_THROTTLE_MS = parseInt(process.env.CURSOR_THROTTLE_MS || '100', 10); // 10/sec default
 // ---------------------------------------------------------------------------
 // Shared Redis client for general commands (NOT pub/sub)
 // ---------------------------------------------------------------------------
@@ -94,6 +105,9 @@ function verifyToken(token) {
 function send(socket, message) {
   if (socket.readyState === 1 /* OPEN */) {
     socket.send(JSON.stringify(message));
+    messagesSent.inc();  // ADD THIS
+  } else {
+    messagesDropped.inc();  // ADD THIS (replace the implicit drop)
   }
 }
 
@@ -111,6 +125,7 @@ function broadcast(modelId, message, exclude = null) {
     if (client === exclude) continue;
     if (client.socket.readyState === 1) {
       client.socket.send(payload);
+      messagesSent.inc();
     }
   }
 }
@@ -148,14 +163,20 @@ fastify.get('/ws', { websocket: true }, (socket, req) => {
 
   const initialModelId = req.query?.model_id || null;
 
-  /** @type {{ socket: import('ws').WebSocket, userId: string, isAlive: boolean, heartbeatTimer: NodeJS.Timeout|null, pongTimer: NodeJS.Timeout|null }} */
+  /** @type {{ socket: import('ws').WebSocket, userId: string, isAlive: boolean, heartbeatTimer: NodeJS.Timeout|null, pongTimer: NodeJS.Timeout|null, lastCursorBroadcastAt: number }} */
   const client = {
     socket,
     userId,
     isAlive: true,
     heartbeatTimer: null,
     pongTimer: null,
+    lastCursorBroadcastAt: 0,
   };
+// Track reconnects
+if (userConnections.has(userId)) {
+  reconnections.inc();
+}
+connectedClients.inc();
 
   fastify.log.info({ userId, initialModelId }, 'WebSocket connected');
 
@@ -183,13 +204,19 @@ fastify.get('/ws', { websocket: true }, (socket, req) => {
   });
 
   subscriber.on('message', (channel, message) => {
+    redisEventsReceived.inc();  // ADD
     if (channel !== redisChannel) return;
     if (client.socket.readyState === 1) {
-      client.socket.send(message); // already JSON from worker
+      client.socket.send(message);
+      messagesSent.inc();
+    } else {
+      messagesDropped.inc();
+      // existing warn log...
     }
   });
 
   subscriber.on('error', (err) => {
+    redisPublishFailures.inc();  // ADD
     fastify.log.warn({ err, userId }, 'Subscriber Redis error');
   });
 
@@ -267,7 +294,14 @@ fastify.get('/ws', { websocket: true }, (socket, req) => {
       }
       case 'CURSOR_MOVE': {
         if (currentModelId) {
+          const now = Date.now();
+          if (now - client.lastCursorBroadcastAt < CURSOR_THROTTLE_MS) {
+            cursorMovesThrottled.inc();
+            break;
+          }
+          client.lastCursorBroadcastAt = now;
           broadcast(currentModelId, { event: 'CURSOR_MOVE', userId, data: msg.data }, client);
+          roomBroadcasts.labels({ event_type: msg.event }).inc();
         }
         break;
       }
@@ -286,6 +320,7 @@ fastify.get('/ws', { websocket: true }, (socket, req) => {
       case 'model:sync': {
         if (currentModelId) {
           broadcast(currentModelId, { event: msg.event, userId, data: msg.data }, client);
+          roomBroadcasts.labels({ event_type: msg.event }).inc();
         }
         break;
       }
@@ -312,7 +347,7 @@ fastify.get('/ws', { websocket: true }, (socket, req) => {
 
     fastify.log.info({ userId }, 'WebSocket disconnected');
   }
-
+  connectedClients.dec();
   socket.on('close', cleanup);
   socket.on('error', (err) => {
     fastify.log.warn({ userId, err: err.message }, 'WebSocket error');
@@ -332,7 +367,20 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
+/**
+ * Cursor throttle — enforces max 10 CURSOR_MOVE broadcasts per second per client.
+ * Uses a simple timestamp gate on the client object (no Redis — per-pod is correct
+ * since cursor positions are ephemeral and not worth cross-pod consistency).
+ * Returns true if the event should be forwarded, false if it should be dropped.
+ */
+function _throttleCursor(client) {
+  const now = Date.now();
+  if (!client.lastCursorAt || (now - client.lastCursorAt) >= CURSOR_THROTTLE_MS) {
+    client.lastCursorAt = now;
+    return true;
+  }
+  return false;
+}
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
@@ -343,3 +391,4 @@ try {
   fastify.log.error(err);
   process.exit(1);
 }
+startMetricsServer();

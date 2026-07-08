@@ -74,8 +74,7 @@ async def dispatch_event(event: str, payload: dict, user_id: uuid.UUID, db: Asyn
     delivery via Celery. Called by other services (models, annotations) on
     state changes — not exposed as a direct API route.
     """
-    from celery import Celery
-    from app.config import settings
+    from app.core.celery_client import get_celery_client
 
     result = await db.execute(
         select(Webhook).where(
@@ -85,7 +84,7 @@ async def dispatch_event(event: str, payload: dict, user_id: uuid.UUID, db: Asyn
     )
     webhooks = result.scalars().all()
 
-    celery_client = Celery(broker=settings.REDIS_URL)
+    celery_client = get_celery_client()
 
     for webhook in webhooks:
         if webhook.events and event in webhook.events:

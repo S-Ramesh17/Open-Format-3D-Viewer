@@ -30,9 +30,12 @@ from celery.exceptions import SoftTimeLimitExceeded
 from app.celery_app import celery_app
 from app.config import settings
 from app.tasks.common import (
+    dispatch_webhook_event,
     download_raw_file,
     get_model_row,
     get_sync_engine,
+    publish_model_progress,
+    publish_model_ready,
     run_node_tool,
     split_binary_chunks,
     update_model_status,
@@ -251,6 +254,14 @@ def process_stl(self: Task, model_id: str) -> dict:
         logger.error("[STL] Model %s not found in DB", model_id)
         return {"error": "model_not_found", "model_id": model_id}
 
+    # ── Idempotency guard — skip if already terminal (redelivery) ──────────
+    if model.get("status") in ("ready", "failed"):
+        logger.info(
+            "[STL] model_id=%s already in terminal status=%s — skipping redelivered task",
+            model_id, model.get("status"),
+        )
+        return {"model_id": model_id, "status": model.get("status"), "skipped": "already_processed"}
+
     user_id = str(model["uploaded_by"])
     s3_raw_key = model["s3_raw_key"]
 
@@ -268,6 +279,7 @@ def process_stl(self: Task, model_id: str) -> dict:
             # ── Download ────────────────────────────────────────────────────
             stage = "download"
             download_raw_file(s3_raw_key, stl_local)
+            publish_model_progress(user_id, model_id, 10, "download")
 
             # ── Size guard ─────────────────────────────────────────────────
             stage = "size_check"
@@ -333,8 +345,8 @@ def process_stl(self: Task, model_id: str) -> dict:
             # ── Update status + publish ────────────────────────────────────
             stage = "finalize"
             update_model_status(engine, model_id, "ready", s3_processed_prefix=processed_prefix)
-            from app.tasks.common import publish_model_ready
             publish_model_ready(user_id, model_id)
+            dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
 
             logger.info("[STL] Processing complete for model_id=%s", model_id)
             return {

@@ -2,7 +2,6 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.core.exceptions import AppException
 from app.core.request_id import get_request_id
@@ -52,13 +51,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         """
         error_code_map = {
             400: "BAD_REQUEST",
-            401: "AUTHENTICATION_ERROR",
-            403: "AUTHORIZATION_ERROR",
+            401: "UNAUTHORIZED",
+            403: "FORBIDDEN",
             404: "NOT_FOUND",
             405: "METHOD_NOT_ALLOWED",
             409: "CONFLICT",
             422: "VALIDATION_ERROR",
-            429: "RATE_LIMIT_EXCEEDED",
+            429: "RATE_LIMITED",
             500: "INTERNAL_ERROR",
             502: "STORAGE_ERROR",
         }

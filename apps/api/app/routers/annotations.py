@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.responses import envelope
 from app.core.authorization import get_project_member
 from app.core.dependencies import get_current_user
+from app.core.request_id import get_request_id
 from app.db.engine import get_db
 from app.models.user import User
 from app.schemas.annotations import AnnotationCreate, AnnotationUpdate, CommentCreate
@@ -27,14 +28,24 @@ router = APIRouter(prefix="/v1", tags=["annotations"])
 async def list_for_model(
     model_id: uuid.UUID,
     status: str | None = Query(default=None),
+    cursor: str | None = Query(default=None, description="Pagination cursor"),
+    limit: int = Query(default=20, ge=1, le=100, description="Results per page"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     model = await get_model(model_id, db)
     await get_project_member(model.project_id, current_user, db)
 
-    items = await list_annotations(model_id, db, status_filter=status)
-    return envelope([i.model_dump(mode="json") for i in items])
+    items, next_cursor = await list_annotations(
+        model_id, db, status_filter=status, limit=limit, cursor=cursor
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "data": [i.model_dump(mode="json") for i in items],
+            "meta": {"request_id": get_request_id(), "next_cursor": next_cursor},
+        },
+    )
 
 
 @router.post("/models/{model_id}/annotations", status_code=201)

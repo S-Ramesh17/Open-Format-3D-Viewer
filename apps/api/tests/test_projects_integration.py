@@ -7,7 +7,7 @@ All tests run against the real FastAPI ASGI app via httpx AsyncClient.
 
 import pytest
 from httpx import AsyncClient
-
+import uuid
 pytestmark = pytest.mark.asyncio
 
 # ---------------------------------------------------------------------------
@@ -217,3 +217,59 @@ class TestProjectAuthorization:
 
         resp = await client.get(f"/v1/projects/{project_id}")
         assert resp.status_code == 404  # membership enforced at query level
+
+
+# ---------------------------------------------------------------------------
+# Project members
+# ---------------------------------------------------------------------------
+
+class TestProjectMembers:
+    async def test_list_members_returns_owner(self, client: AsyncClient, unique_email: str):
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Team Project"})
+        project_id = create_resp.json()["data"]["id"]
+
+        resp = await client.get(f"/v1/projects/{project_id}/members")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body["data"], list)
+        assert len(body["data"]) == 1
+        assert body["data"][0]["role"] == "admin"
+        assert "user_id" in body["data"][0]
+
+    async def test_list_members_requires_auth(self, client: AsyncClient):
+        resp = await client.get(f"/v1/projects/{uuid.uuid4()}/members")
+        assert resp.status_code == 401
+
+    async def test_list_members_requires_membership(self, client: AsyncClient, unique_email: str):
+        """User B cannot view User A's project members."""
+        email_a = unique_email
+        email_b = f"other_{unique_email}"
+
+        await _register_and_login(client, email_a)
+        create_resp = await client.post("/v1/projects", json={"name": "Private Team"})
+        project_id = create_resp.json()["data"]["id"]
+
+        await client.post(
+            "/v1/auth/register",
+            json={"email": email_b, "password": "testpass123"},
+        )
+        await client.post(
+            "/v1/auth/login",
+            json={"email": email_b, "password": "testpass123"},
+        )
+
+        resp = await client.get(f"/v1/projects/{project_id}/members")
+        assert resp.status_code in (403, 404)
+
+    async def test_list_members_envelope_shape(self, client: AsyncClient, unique_email: str):
+        """Members endpoint uses standard envelope (data + meta.request_id)."""
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Envelope Check"})
+        project_id = create_resp.json()["data"]["id"]
+
+        resp = await client.get(f"/v1/projects/{project_id}/members")
+        body = resp.json()
+        assert "data" in body
+        assert "meta" in body
+        assert "request_id" in body["meta"]

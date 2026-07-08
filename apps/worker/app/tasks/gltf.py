@@ -17,26 +17,31 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 
 from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.config import settings
 from app.tasks.common import (
-    GLTF_CHUNK_MAX_BYTES,
+    dispatch_webhook_event,
     download_raw_file,
     get_model_row,
     get_sync_engine,
-    publish_model_failed,
+    publish_model_progress,
     publish_model_ready,
     run_node_tool,
     split_binary_chunks,
     update_model_status,
     upsert_model_metadata,
     upload_processed_file,
+)
+from app.tasks.error_handler import (
+    assert_file_size,
+    handle_task_failure,
+    is_retryable,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,6 +195,14 @@ def process_gltf(self: Task, model_id: str) -> dict:
         logger.error("[GLTF] Model %s not found in DB", model_id)
         return {"error": "model_not_found", "model_id": model_id}
 
+    # ── 1b. Idempotency guard — skip if already terminal (redelivery) ──────
+    if model.get("status") in ("ready", "failed"):
+        logger.info(
+            "[GLTF] model_id=%s already in terminal status=%s — skipping redelivered task",
+            model_id, model.get("status"),
+        )
+        return {"model_id": model_id, "status": model.get("status"), "skipped": "already_processed"}
+
     user_id = str(model["uploaded_by"])
     s3_raw_key = model["s3_raw_key"]
 
@@ -203,21 +216,34 @@ def process_gltf(self: Task, model_id: str) -> dict:
         out_dir = os.path.join(tmpdir, "output")
         os.makedirs(out_dir, exist_ok=True)
 
+        stage = "init"
         try:
+            stage = "download"
             # ── 2. Download from S3 ────────────────────────────────────────
             download_raw_file(s3_raw_key, local_input)
+            publish_model_progress(user_id, model_id, 10, "download")
 
+            stage = "size_check"
+            # ── 2b. 500 MB file size guard ───────────────────────────────
+            assert_file_size(local_input)
+
+            stage = "validate"
             # ── 3. Validate ────────────────────────────────────────────────
             validation_report = _validate_gltf(local_input)
+            publish_model_progress(user_id, model_id, 25, "validate")
 
+            stage = "compress"
             # ── 4. Optimize with Draco compression ─────────────────────────
             optimized_path = _optimize_gltf(local_input, out_dir, compression_level=7)
+            publish_model_progress(user_id, model_id, 50, "optimize")
 
+            stage = "split"
             # ── 5. Split if > 32 MB ────────────────────────────────────────
             out_ext = Path(optimized_path).suffix
             out_stem = Path(optimized_path).stem
             chunks = split_binary_chunks(optimized_path, out_dir, out_stem, out_ext)
 
+            stage = "upload"
             # ── 6. Upload chunks to S3 ─────────────────────────────────────
             processed_prefix = f"processed/{model_id}"
             uploaded_keys: list[str] = []
@@ -231,6 +257,7 @@ def process_gltf(self: Task, model_id: str) -> dict:
 
             logger.info("[GLTF] Uploaded %d chunk(s)", len(uploaded_keys))
 
+            stage = "metadata"
             # ── 7. Persist metadata ────────────────────────────────────────
             warnings = validation_report.get("issues", {}).get("numWarnings", 0) if validation_report else 0
             upsert_model_metadata(
@@ -248,6 +275,7 @@ def process_gltf(self: Task, model_id: str) -> dict:
                 spatial_tree={},
             )
 
+            stage = "finalize"
             # ── 8. Update model status → ready ─────────────────────────────
             update_model_status(
                 engine,
@@ -258,6 +286,7 @@ def process_gltf(self: Task, model_id: str) -> dict:
 
             # ── 9. Publish Redis event ─────────────────────────────────────
             publish_model_ready(user_id, model_id)
+            dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
 
             logger.info("[GLTF] Processing complete for model_id=%s", model_id)
             return {
@@ -273,16 +302,17 @@ def process_gltf(self: Task, model_id: str) -> dict:
         except GltfValidationError as exc:
             # Validation errors are permanent failures — do not retry
             logger.error("[GLTF] Validation failed for model_id=%s: %s", model_id, exc)
-            update_model_status(engine, model_id, "failed", error_message=str(exc))
-            publish_model_failed(user_id, model_id, str(exc))
-            return {"model_id": model_id, "status": "failed", "error": str(exc)[:500]}
+            return handle_task_failure(engine, model_id, user_id, "validate", exc)
+
+        except SoftTimeLimitExceeded:
+            logger.error("[GLTF] Soft time limit exceeded at stage=%s", stage)
+            return handle_task_failure(
+                engine, model_id, user_id, stage, SoftTimeLimitExceeded("soft time limit")
+            )
 
         except Exception as exc:
-            logger.exception("[GLTF] Processing failed for model_id=%s: %s", model_id, exc)
-            update_model_status(engine, model_id, "failed", error_message=str(exc))
-            publish_model_failed(user_id, model_id, str(exc))
-
-            if isinstance(exc, (ConnectionError, OSError)):
+            logger.exception("[GLTF] Failed at stage=%s for model_id=%s", stage, model_id)
+            result = handle_task_failure(engine, model_id, user_id, stage, exc)
+            if is_retryable(exc):
                 raise self.retry(exc=exc)
-
-            return {"model_id": model_id, "status": "failed", "error": str(exc)[:500]}
+            return result

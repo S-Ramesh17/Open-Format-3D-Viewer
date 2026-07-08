@@ -1,6 +1,8 @@
 from redis.asyncio import Redis
 from app.config import settings
 
+import json as _json
+
 _redis_client: Redis | None = None
 
 
@@ -71,15 +73,24 @@ async def delete_all_user_refresh_tokens(user_id: str) -> None:
             break
 
 
-import json as _json
 
 
 async def publish_model_event(user_id: str, event: str, data: dict) -> None:
     """
     Publish a real-time event to a user's WebSocket channel.
     Consumed by apps/ws-server's per-connection Redis subscriber.
+
+    Failures are logged but never propagated — a Redis publish error must
+    not cause the calling HTTP request (e.g. confirm_upload) to fail.
     """
-    redis = await get_redis()
-    channel = f"model_events:{user_id}"
-    payload = _json.dumps({"event": event, "data": data})
-    await redis.publish(channel, payload)
+    try:
+        redis = await get_redis()
+        channel = f"model_events:{user_id}"
+        payload = _json.dumps({"event": event, "data": data})
+        await redis.publish(channel, payload)
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "publish_model_event failed user_id=%s event=%s: %s",
+            user_id, event, exc,
+        )

@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import String, Text, BigInteger, DateTime, Enum, ForeignKey, Index, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -20,6 +21,7 @@ class Model(Base):
         ForeignKey("users.id"), nullable=False
     )
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     file_format: Mapped[str] = mapped_column(
         Enum("ifc", "gltf", "glb", "step", "stp", "obj", "stl", name="file_format_enum"),
         nullable=False,
@@ -33,6 +35,9 @@ class Model(Base):
         nullable=False,
     )
     error_message: Mapped[str | None] = mapped_column(Text)
+    element_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    bounds_min_xyz: Mapped[list[float] | None] = mapped_column(JSONB, nullable=True)
+    bounds_max_xyz: Mapped[list[float] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

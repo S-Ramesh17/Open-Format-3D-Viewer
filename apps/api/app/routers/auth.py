@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.responses import envelope, envelope_model
 from app.config import settings
 from app.core.cookies import (
-    ACCESS_TOKEN_COOKIE,
     REFRESH_TOKEN_COOKIE,
     clear_auth_cookies,
     set_auth_cookies,

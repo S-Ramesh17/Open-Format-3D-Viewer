@@ -16,7 +16,6 @@ Flow:
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
@@ -26,14 +25,37 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import boto3
-from botocore.config import Config as BotoConfig
+
 from celery import Task
-from sqlalchemy import create_engine, select, update
-from sqlalchemy.orm import Session
+from celery.exceptions import SoftTimeLimitExceeded
+
 
 from app.celery_app import celery_app
 from app.config import settings
+
+from app.tasks.common import (
+    _raw_sql,
+    acquire_task_lock,
+    dispatch_webhook_event,
+    download_raw_file,
+    get_sync_engine,
+    get_model_row,
+    release_task_lock,
+    update_model_status,
+    upsert_model_metadata,
+    publish_model_progress,
+    publish_model_ready,
+    upload_processed_file,
+)
+from app.tasks.error_handler import (
+    assert_file_size,
+    handle_task_failure,
+    is_retryable,
+)
+from app.tasks.metrics import (
+    IFC_CONVERSION_DURATION,
+    ACTIVE_TASKS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,91 +63,6 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 SUPPORTED_SCHEMAS = {"IFC2X3", "IFC4", "IFC4X3"}
-
-# ---------------------------------------------------------------------------
-# Helpers — S3
-# ---------------------------------------------------------------------------
-
-def _s3_client():
-    return boto3.client(
-        "s3",
-        region_name=settings.AWS_REGION,
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID or None,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY or None,
-        config=BotoConfig(signature_version="s3v4"),
-    )
-
-
-def _download_ifc(s3_key: str, dest_path: str) -> None:
-    """Stream IFC file from S3 raw bucket to local disk."""
-    s3 = _s3_client()
-    logger.info("Downloading s3://%s/%s → %s", settings.S3_RAW_BUCKET, s3_key, dest_path)
-    s3.download_file(settings.S3_RAW_BUCKET, s3_key, dest_path)
-
-
-def _upload_xkt_chunk(local_path: str, s3_key: str) -> None:
-    """Upload a single XKT chunk to the processed bucket."""
-    s3 = _s3_client()
-    logger.info("Uploading XKT chunk → s3://%s/%s", settings.S3_PROCESSED_BUCKET, s3_key)
-    s3.upload_file(
-        local_path,
-        settings.S3_PROCESSED_BUCKET,
-        s3_key,
-        ExtraArgs={"ContentType": "application/octet-stream"},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Helpers — DB (sync SQLAlchemy — Celery runs sync)
-# ---------------------------------------------------------------------------
-
-def _get_sync_engine():
-    """Create a synchronous SQLAlchemy engine for use inside Celery tasks."""
-    url = settings.DATABASE_URL
-    # If the URL uses asyncpg driver, swap to psycopg2 for sync access
-    url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    url = url.replace("postgresql+aiopg://", "postgresql+psycopg2://")
-    return create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=0)
-
-
-def _get_model_row(engine, model_id: str) -> dict | None:
-    """Fetch model row as dict. Returns None if not found."""
-    with engine.connect() as conn:
-        row = conn.execute(
-            _raw_sql(
-                "SELECT id, uploaded_by, s3_raw_key, s3_processed_prefix, status "
-                "FROM models WHERE id = :mid",
-            ),
-            {"mid": model_id},
-        ).fetchone()
-    if row is None:
-        return None
-    return dict(row._mapping)
-
-
-def _raw_sql(sql: str):
-    from sqlalchemy import text
-    return text(sql)
-
-
-def _update_model_status(
-    engine,
-    model_id: str,
-    status: str,
-    s3_processed_prefix: str | None = None,
-    error_message: str | None = None,
-) -> None:
-    set_clauses = "status = :status, updated_at = now()"
-    params: dict = {"status": status, "model_id": model_id}
-    if s3_processed_prefix is not None:
-        set_clauses += ", s3_processed_prefix = :prefix"
-        params["prefix"] = s3_processed_prefix
-    if error_message is not None:
-        set_clauses += ", error_message = :err"
-        params["err"] = error_message[:2000]
-    with engine.begin() as conn:
-        conn.execute(_raw_sql(f"UPDATE models SET {set_clauses} WHERE id = :model_id"), params)
-
 
 def _upsert_model_elements(engine, model_id: str, elements: list[dict]) -> None:
     """Bulk-insert model elements, replacing any existing ones for this model."""
@@ -139,7 +76,7 @@ def _upsert_model_elements(engine, model_id: str, elements: list[dict]) -> None:
                 _raw_sql(
                     "INSERT INTO model_elements "
                     "(id, model_id, guid, element_type, name, properties, created_at) "
-                    "VALUES (:id, :model_id, :guid, :element_type, :name, :properties::jsonb, now())"
+                    "VALUES (:id, :model_id, :guid, :element_type, :name, CAST(:properties AS jsonb), now())"
                 ),
                 {
                     "id": str(uuid.uuid4()),
@@ -151,58 +88,7 @@ def _upsert_model_elements(engine, model_id: str, elements: list[dict]) -> None:
                 },
             )
 
-
-def _upsert_model_metadata(engine, model_id: str, properties: dict, spatial_tree: dict) -> None:
-    with engine.begin() as conn:
-        existing = conn.execute(
-            _raw_sql("SELECT id FROM model_metadata WHERE model_id = :mid"),
-            {"mid": model_id},
-        ).fetchone()
-        if existing:
-            conn.execute(
-                _raw_sql(
-                    "UPDATE model_metadata SET properties = :props::jsonb, "
-                    "spatial_tree = :tree::jsonb, updated_at = now() "
-                    "WHERE model_id = :mid"
-                ),
-                {"props": json.dumps(properties), "tree": json.dumps(spatial_tree), "mid": model_id},
-            )
-        else:
-            conn.execute(
-                _raw_sql(
-                    "INSERT INTO model_metadata (id, model_id, properties, spatial_tree, created_at, updated_at) "
-                    "VALUES (:id, :mid, :props::jsonb, :tree::jsonb, now(), now())"
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "mid": model_id,
-                    "props": json.dumps(properties),
-                    "tree": json.dumps(spatial_tree),
-                },
-            )
-
-
-# ---------------------------------------------------------------------------
-# Helpers — Redis publish (sync)
-# ---------------------------------------------------------------------------
-
-def _publish_model_ready(user_id: str, model_id: str) -> None:
-    """Publish model_ready event to Redis channel model_events:{user_id}."""
-    import redis as redis_lib
-
-    channel = f"model_events:{user_id}"
-    payload = json.dumps(
-        {"event": "model:ready", "data": {"model_id": model_id, "status": "ready"}}
-    )
-    try:
-        r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
-        r.publish(channel, payload)
-        r.close()
-        logger.info("Published model:ready → %s", channel)
-    except Exception as exc:  # pragma: no cover
-        logger.error("Failed to publish Redis event: %s", exc)
-
-
+            
 # ---------------------------------------------------------------------------
 # IFC parsing helpers
 # ---------------------------------------------------------------------------
@@ -360,6 +246,44 @@ def _extract_geometry(ifc_file, ifc_path: str) -> dict:
         return {"error": str(exc)}
 
 
+def _compute_bounds(ifc_file) -> tuple[list[float] | None, list[float] | None]:
+    """
+    Compute axis-aligned bounding box across all IfcElement shapes using
+    a separate world-coordinate geom.iterator pass.
+    Returns (min_xyz, max_xyz) or (None, None) if geometry is unavailable.
+    """
+    try:
+        import ifcopenshell.geom as geom  # type: ignore
+
+        bounds_settings = geom.settings()
+        bounds_settings.set("use-world-coords", True)
+
+        it = geom.iterator(bounds_settings, ifc_file, num_threads=1)
+
+        min_x = min_y = min_z = float("inf")
+        max_x = max_y = max_z = float("-inf")
+        found = False
+
+        if it.initialize():
+            while True:
+                shape = it.get()
+                verts = shape.geometry.verts
+                for i in range(0, len(verts), 3):
+                    x, y, z = verts[i], verts[i + 1], verts[i + 2]
+                    min_x, min_y, min_z = min(min_x, x), min(min_y, y), min(min_z, z)
+                    max_x, max_y, max_z = max(max_x, x), max(max_y, y), max(max_z, z)
+                    found = True
+                if not it.next():
+                    break
+
+        if not found:
+            return None, None
+        return [min_x, min_y, min_z], [max_x, max_y, max_z]
+    except Exception as exc:
+        logger.warning("[IFC] Bounds computation skipped: %s", exc)
+        return None, None
+
+
 # ---------------------------------------------------------------------------
 # XKT conversion via Node subprocess
 # ---------------------------------------------------------------------------
@@ -455,7 +379,9 @@ def _split_xkt_chunks(xkt_files: list[str], output_dir: str) -> list[str]:
 @celery_app.task(
     name="app.tasks.ifc.process_model",
     bind=True,
-    max_retries=3,
+    time_limit=1800,
+    soft_time_limit=1500,
+    max_retries=2,
     default_retry_delay=60,
     acks_late=True,
     reject_on_worker_lost=True,
@@ -465,139 +391,172 @@ def process_model(self: Task, model_id: str) -> dict:
     Full IFC processing pipeline.
     Called by the API layer after upload confirmation.
     """
-    logger.info("[IFC] Starting processing for model_id=%s", model_id)
+    logger.info("...")
+    engine = get_sync_engine()
+    _task_start = __import__('time').monotonic()
+    ACTIVE_TASKS.labels(task_name="ifc.process_model").inc()
+    try:
+        # ── 1. Fetch model row ────────────────────────────────────────────────
+        model = get_model_row(engine, model_id)
+        if model is None:
+            logger.error("[IFC] Model %s not found in DB", model_id)
+            return {"error": "model_not_found", "model_id": model_id}
 
-    engine = _get_sync_engine()
+        # ── 1b. Idempotency guard — skip if already terminal (redelivery) ──────
+        if model.get("status") in ("ready", "failed"):
+            logger.info(
+                "[IFC] model_id=%s already in terminal status=%s — skipping redelivered task",
+                model_id, model.get("status"),
+            )
+            return {"model_id": model_id, "status": model.get("status"), "skipped": "already_processed"}
 
-    # ── 1. Fetch model row ────────────────────────────────────────────────
-    model = _get_model_row(engine, model_id)
-    if model is None:
-        logger.error("[IFC] Model %s not found in DB", model_id)
-        return {"error": "model_not_found", "model_id": model_id}
+        # ── 1c. Redis lock — prevent duplicate concurrent execution ──────────
+        if not acquire_task_lock(model_id, "app.tasks.ifc.process_model"):
+            return {"model_id": model_id, "status": "skipped", "reason": "duplicate_task"}
 
-    user_id = str(model["uploaded_by"])
-    s3_raw_key = model["s3_raw_key"]
+        user_id = str(model["uploaded_by"])
+        s3_raw_key = model["s3_raw_key"]
 
-    if not s3_raw_key:
-        _update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
-        return {"error": "no_s3_key", "model_id": model_id}
+        if not s3_raw_key:
+            update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
+            return {"error": "no_s3_key", "model_id": model_id}
 
-    with tempfile.TemporaryDirectory(prefix="ifc_") as tmpdir:
-        ifc_local = os.path.join(tmpdir, "input.ifc")
-        xkt_dir = os.path.join(tmpdir, "xkt")
-        os.makedirs(xkt_dir, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="ifc_") as tmpdir:
+            ifc_local = os.path.join(tmpdir, "input.ifc")
+            xkt_dir = os.path.join(tmpdir, "xkt")
+            os.makedirs(xkt_dir, exist_ok=True)
 
-        try:
-            # ── 2. Download from S3 ──────────────────────────────────────
-            _download_ifc(s3_raw_key, ifc_local)
-
-            # ── 2b. 500 MB file size guard ───────────────────────────────
-            from app.tasks.error_handler import assert_file_size
-            assert_file_size(ifc_local)
-
-            # ── 3. Open with IfcOpenShell ────────────────────────────────
+            stage = "init"
             try:
-                import ifcopenshell  # type: ignore
-            except ImportError:
-                raise RuntimeError(
-                    "ifcopenshell is not installed. "
-                    "Add it to worker dependencies: pip install ifcopenshell"
+                stage = "download"
+                # ── 2. Download from S3 ──────────────────────────────────────
+                download_raw_file(s3_raw_key, ifc_local)
+                publish_model_progress(user_id, model_id, 10, "download")
+
+                stage = "size_check"
+                # ── 2b. 500 MB file size guard ───────────────────────────────
+                assert_file_size(ifc_local)
+
+                stage = "parse"
+                # ── 3. Open with IfcOpenShell ────────────────────────────────
+                try:
+                    import ifcopenshell  # type: ignore
+                except ImportError:
+                    raise RuntimeError(
+                        "ifcopenshell is not installed. "
+                        "Add it to worker dependencies: pip install ifcopenshell"
+                    )
+
+                logger.info("[IFC] Opening %s with ifcopenshell", ifc_local)
+                ifc_file = ifcopenshell.open(ifc_local)
+
+
+                # ── 4. Validate schema ───────────────────────────────────────
+                stage = "validate"
+                schema = ifc_file.schema  # e.g. "IFC2X3", "IFC4", "IFC4X3"
+                logger.info("[IFC] Schema: %s", schema)
+                if schema not in SUPPORTED_SCHEMAS:
+                    raise ValueError(
+                        f"Unsupported IFC schema '{schema}'. "
+                        f"Supported: {', '.join(sorted(SUPPORTED_SCHEMAS))}"
+                    )
+
+                # ── 5. Extract geometry stats ────────────────────────────────
+                publish_model_progress(user_id, model_id, 25, "parse")
+                stage = "extract"
+                geom_stats = _extract_geometry(ifc_file, ifc_local)
+
+                # ── 6. Extract elements + property sets ──────────────────────
+                elements = _extract_elements(ifc_file)
+
+                # ── 7. Build spatial tree ────────────────────────────────────
+                spatial_tree = _build_spatial_tree(ifc_file)
+                publish_model_progress(user_id, model_id, 50, "extract")
+
+                # ── 8. XKT conversion ────────────────────────────────────────
+                stage = "convert"
+                xkt_files = _convert_to_xkt(ifc_local, xkt_dir)
+                xkt_chunks = _split_xkt_chunks(xkt_files, xkt_dir)
+                publish_model_progress(user_id, model_id, 75, "convert")
+
+                # ── 9. Upload XKT chunks to S3 ───────────────────────────────
+                stage = "upload"
+                processed_prefix = f"processed/{model_id}"
+                uploaded_keys: list[str] = []
+
+                for i, chunk_path in enumerate(xkt_chunks):
+                    chunk_name = Path(chunk_path).name
+                    s3_processed_key = f"{processed_prefix}/{chunk_name}"
+                    upload_processed_file(chunk_path, s3_processed_key, content_type="application/octet-stream")
+                    uploaded_keys.append(s3_processed_key)
+
+                logger.info("[IFC] Uploaded %d XKT chunk(s)", len(uploaded_keys))
+                publish_model_progress(user_id, model_id, 90, "upload")
+
+                # ── 10. Persist elements to DB ───────────────────────────────
+                stage = "metadata"
+                _upsert_model_elements(engine, model_id, elements)
+
+                # ── 11. Persist metadata ─────────────────────────────────────
+                upsert_model_metadata(
+                    engine,
+                    model_id,
+                    properties={
+                        "source_format": "ifc",
+                        "schema": schema,
+                        "geometry": geom_stats,
+                        "element_count": len(elements),
+                        "chunk_count": len(uploaded_keys),
+                        "xkt_chunks": uploaded_keys,
+                    },
+                    spatial_tree=spatial_tree,
                 )
 
-            logger.info("[IFC] Opening %s with ifcopenshell", ifc_local)
-            ifc_file = ifcopenshell.open(ifc_local)
+                # ── 12. Compute bounding box ──────────────────────────────────
+                bounds_min, bounds_max = _compute_bounds(ifc_file)
 
-            # ── 4. Validate schema ───────────────────────────────────────
-            schema = ifc_file.schema  # e.g. "IFC2X3", "IFC4", "IFC4X3"
-            logger.info("[IFC] Schema: %s", schema)
-            if schema not in SUPPORTED_SCHEMAS:
-                raise ValueError(
-                    f"Unsupported IFC schema '{schema}'. "
-                    f"Supported: {', '.join(sorted(SUPPORTED_SCHEMAS))}"
+                # ── 13. Update model status → ready ───────────────────────────
+                stage = "finalize"
+                update_model_status(
+                    engine,
+                    model_id,
+                    "ready",
+                    s3_processed_prefix=processed_prefix,
+                    element_count=len(elements),
+                    bounds_min_xyz=bounds_min,
+                    bounds_max_xyz=bounds_max,
                 )
 
-            # ── 5. Extract geometry stats ────────────────────────────────
-            geom_stats = _extract_geometry(ifc_file, ifc_local)
+                # ── 14. Publish Redis event ────────────────────────────────────
+                publish_model_ready(user_id, model_id)
+                publish_model_progress(user_id, model_id, 100, "ready")
+                dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
+                release_task_lock(model_id, "app.tasks.ifc.process_model")
 
-            # ── 6. Extract elements + property sets ──────────────────────
-            elements = _extract_elements(ifc_file)
-
-            # ── 7. Build spatial tree ────────────────────────────────────
-            spatial_tree = _build_spatial_tree(ifc_file)
-
-            # ── 8. XKT conversion ────────────────────────────────────────
-            xkt_files = _convert_to_xkt(ifc_local, xkt_dir)
-            xkt_chunks = _split_xkt_chunks(xkt_files, xkt_dir)
-
-            # ── 9. Upload XKT chunks to S3 ───────────────────────────────
-            processed_prefix = f"processed/{model_id}"
-            uploaded_keys: list[str] = []
-
-            for i, chunk_path in enumerate(xkt_chunks):
-                chunk_name = Path(chunk_path).name
-                s3_processed_key = f"{processed_prefix}/{chunk_name}"
-                _upload_xkt_chunk(chunk_path, s3_processed_key)
-                uploaded_keys.append(s3_processed_key)
-
-            logger.info("[IFC] Uploaded %d XKT chunk(s)", len(uploaded_keys))
-
-            # ── 10. Persist elements to DB ───────────────────────────────
-            _upsert_model_elements(engine, model_id, elements)
-
-            # ── 11. Persist metadata + spatial tree to DB ─────────────────
-            _upsert_model_metadata(
-                engine,
-                model_id,
-                properties={
+                logger.info("[IFC] Processing complete for model_id=%s", model_id)
+                return {
+                    "model_id": model_id,
+                    "status": "ready",
                     "schema": schema,
                     "element_count": len(elements),
+                    "chunks": len(uploaded_keys),
                     "geometry": geom_stats,
-                    "xkt_chunks": uploaded_keys,
-                },
-                spatial_tree=spatial_tree,
-            )
+                }
 
-            # ── 12. Update model status → ready ──────────────────────────
-            _update_model_status(
-                engine,
-                model_id,
-                "ready",
-                s3_processed_prefix=processed_prefix,
-            )
-
-            # ── 13. Publish Redis event ───────────────────────────────────
-            _publish_model_ready(user_id, model_id)
-
-            logger.info("[IFC] Processing complete for model_id=%s", model_id)
-            return {
-                "model_id": model_id,
-                "status": "ready",
-                "schema": schema,
-                "element_count": len(elements),
-                "xkt_chunks": len(xkt_chunks),
-            }
-
-        except Exception as exc:
-            logger.exception("[IFC] Processing failed for model_id=%s: %s", model_id, exc)
-            _update_model_status(engine, model_id, "failed", error_message=str(exc))
-
-            # Publish failure event so ws-server can relay it to the client
-            try:
-                import redis as redis_lib
-                r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
-                r.publish(
-                    f"model_events:{user_id}",
-                    json.dumps({
-                        "event": "model:failed",
-                        "data": {"model_id": model_id, "error": str(exc)[:500]},
-                    }),
+            except SoftTimeLimitExceeded:
+                logger.error("[IFC] Soft time limit exceeded at stage=%s", stage)
+                return handle_task_failure(
+                    engine, model_id, user_id, stage, SoftTimeLimitExceeded("soft time limit")
                 )
-                r.close()
-            except Exception:
-                pass
 
-            # Celery retry with exponential backoff for transient errors
-            if isinstance(exc, (ConnectionError, OSError)):
-                raise self.retry(exc=exc)
-
-            return {"model_id": model_id, "status": "failed", "error": str(exc)[:500]}
+            except Exception as exc:
+                logger.exception("[IFC] Failed at stage=%s for model_id=%s", stage, model_id)
+                result = handle_task_failure(engine, model_id, user_id, stage, exc)
+                if is_retryable(exc):
+                    raise self.retry(exc=exc)
+                release_task_lock(model_id, "app.tasks.ifc.process_model")
+                return result
+    finally:
+        ACTIVE_TASKS.labels(task_name="ifc.process_model").dec()
+        elapsed = __import__('time').monotonic() - _task_start
+        IFC_CONVERSION_DURATION.observe(elapsed)

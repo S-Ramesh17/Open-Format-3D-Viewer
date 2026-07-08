@@ -19,7 +19,7 @@ from botocore.config import Config as BotoConfig
 from sqlalchemy import create_engine
 
 from app.config import settings
-
+import os  # needed for local storage path operations
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +38,22 @@ def _s3_client():
 
 
 def download_raw_file(s3_key: str, dest_path: str) -> None:
-    """Download a file from the raw S3 bucket to local disk."""
+    """Download a file from the raw S3 bucket (or local storage) to local disk."""
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        import shutil
+        local_src = os.path.join(settings.LOCAL_STORAGE_PATH, "raw", s3_key)
+        logger.info("[LOCAL] Copying %s → %s", local_src, dest_path)
+        if not os.path.exists(local_src):
+            raise FileNotFoundError(
+                f"Local raw file not found: {local_src}. "
+                "Place your test file at this path before triggering the task."
+            )
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        shutil.copy2(local_src, dest_path)
+        return
+    # END TEMP LOCAL STORAGE
+
     s3 = _s3_client()
     logger.info("Downloading s3://%s/%s → %s", settings.S3_RAW_BUCKET, s3_key, dest_path)
     s3.download_file(settings.S3_RAW_BUCKET, s3_key, dest_path)
@@ -49,7 +64,17 @@ def upload_processed_file(
     s3_key: str,
     content_type: str = "application/octet-stream",
 ) -> None:
-    """Upload a processed output file to the processed S3 bucket."""
+    """Upload a processed output file to the processed S3 bucket (or local storage)."""
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        import shutil
+        local_dest = os.path.join(settings.LOCAL_STORAGE_PATH, "processed", s3_key)
+        os.makedirs(os.path.dirname(local_dest), exist_ok=True)
+        shutil.copy2(local_path, local_dest)
+        logger.info("[LOCAL] Saved processed file → %s", local_dest)
+        return
+    # END TEMP LOCAL STORAGE
+
     s3 = _s3_client()
     logger.info(
         "Uploading processed file → s3://%s/%s",
@@ -63,7 +88,6 @@ def upload_processed_file(
         ExtraArgs={"ContentType": content_type},
     )
 
-
 # ---------------------------------------------------------------------------
 # SQLAlchemy (sync — Celery tasks are synchronous)
 # ---------------------------------------------------------------------------
@@ -72,7 +96,7 @@ def _raw_sql(sql: str):
     from sqlalchemy import text
     return text(sql)
 
-sync_engine = None
+_sync_engine = None
 
 def get_sync_engine():
         global _sync_engine
@@ -105,6 +129,9 @@ def update_model_status(
     status: str,
     s3_processed_prefix: str | None = None,
     error_message: str | None = None,
+    element_count: int | None = None,
+    bounds_min_xyz: list[float] | None = None,
+    bounds_max_xyz: list[float] | None = None,
 ) -> None:
     set_clauses = "status = :status, updated_at = now()"
     params: dict = {"status": status, "model_id": model_id}
@@ -114,6 +141,15 @@ def update_model_status(
     if error_message is not None:
         set_clauses += ", error_message = :err"
         params["err"] = error_message[:2000]
+    if element_count is not None:
+        set_clauses += ", element_count = :element_count"
+        params["element_count"] = element_count
+    if bounds_min_xyz is not None:
+        set_clauses += ", bounds_min_xyz = CAST(:bounds_min AS jsonb)"
+        params["bounds_min"] = json.dumps(bounds_min_xyz)
+    if bounds_max_xyz is not None:
+        set_clauses += ", bounds_max_xyz = CAST(:bounds_max AS jsonb)"
+        params["bounds_max"] = json.dumps(bounds_max_xyz)
     with engine.begin() as conn:
         conn.execute(
             _raw_sql(f"UPDATE models SET {set_clauses} WHERE id = :model_id"),
@@ -136,7 +172,7 @@ def upsert_model_metadata(
             conn.execute(
                 _raw_sql(
                     "UPDATE model_metadata "
-                    "SET properties = :props::jsonb, spatial_tree = :tree::jsonb, "
+                    "SET properties = CAST(:props AS jsonb), spatial_tree = CAST(:tree AS jsonb), "
                     "updated_at = now() "
                     "WHERE model_id = :mid"
                 ),
@@ -151,7 +187,7 @@ def upsert_model_metadata(
                 _raw_sql(
                     "INSERT INTO model_metadata "
                     "(id, model_id, properties, spatial_tree, created_at, updated_at) "
-                    "VALUES (:id, :mid, :props::jsonb, :tree::jsonb, now(), now())"
+                    "VALUES (:id, :mid, CAST(:props AS jsonb), CAST(:tree AS jsonb), now(), now())"
                 ),
                 {
                     "id": str(uuid.uuid4()),
@@ -208,7 +244,30 @@ def publish_model_failed(user_id: str, model_id: str, error: str) -> None:
 # ---------------------------------------------------------------------------
 
 import subprocess  # noqa: E402  (placed after logger setup intentionally)
+def publish_model_progress(user_id: str, model_id: str, percent: int, stage: str = "") -> None:
+    """
+    Publish a model:progress event to the ws-server relay channel.
+    percent: 0–100
+    stage: human-readable stage name e.g. "download", "convert", "upload"
+    """
+    import redis as redis_lib
 
+    channel = f"model_events:{user_id}"
+    payload = json.dumps({
+        "event": "model:progress",
+        "data": {
+            "model_id": model_id,
+            "percent": percent,
+            "stage": stage,
+        },
+    })
+    try:
+        r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+        r.publish(channel, payload)
+        r.close()
+        logger.debug("[PROGRESS] model_id=%s %d%% stage=%s", model_id, percent, stage)
+    except Exception as exc:
+        logger.warning("[PROGRESS] Failed to publish progress event: %s", exc)
 
 def run_node_tool(
     cmd: list[str],
@@ -268,3 +327,121 @@ def split_binary_chunks(
             chunks.append(str(chunk_path))
             part += 1
     return chunks
+
+
+# ---------------------------------------------------------------------------
+# Idempotency guard — Week 3 Day 2
+# ---------------------------------------------------------------------------
+#
+# acks_late=True + reject_on_worker_lost=True means a worker crash mid-task
+# causes Celery to redeliver the same task to another worker. Without a
+# guard, the redelivered task reprocesses the file from scratch, re-uploads
+# chunks, and can double-publish a model:ready Redis event to the client.
+#
+# This guard is intentionally lightweight (a single status read) rather
+# than a distributed lock — false negatives (allowing a duplicate run) are
+# tolerable since downstream writes are idempotent UPSERTs; the goal is to
+# skip the expensive case (model already "ready") cheaply.
+
+_TERMINAL_STATUSES = {"ready", "failed"}
+
+
+def is_already_processed(engine, model_id: str) -> bool:
+    """
+    Returns True if the model has already reached a terminal status
+    ("ready" or "failed") — meaning a previous delivery of this task
+    already completed the work.
+
+    Call this immediately after get_model_row() and before any download,
+    parse, or upload work begins. If True, the caller should return early
+    without re-publishing events or re-uploading files.
+    """
+    row = get_model_row(engine, model_id)
+    if row is None:
+        return False
+    return row.get("status") in _TERMINAL_STATUSES
+
+
+# ---------------------------------------------------------------------------
+# Redis task lock — Week 3 Day 2
+# ---------------------------------------------------------------------------
+
+_TASK_LOCK_TTL = 2100  # 35 min — longer than IFC task time_limit=1800s
+
+
+def acquire_task_lock(model_id: str, task_name: str) -> bool:
+    """
+    Try to acquire a per-model processing lock in Redis using SET NX EX.
+    Returns True if this worker holds the lock, False if a duplicate.
+    Fails open (returns True) if Redis is unavailable.
+    """
+    import redis as redis_lib
+
+    lock_key = f"task_lock:{task_name}:{model_id}"
+    try:
+        r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+        acquired = r.set(lock_key, "1", nx=True, ex=_TASK_LOCK_TTL)
+        r.close()
+        if not acquired:
+            logger.warning(
+                "[LOCK] Duplicate task — another worker holds lock "
+                "model_id=%s task=%s. Skipping.", model_id, task_name,
+            )
+        return bool(acquired)
+    except Exception as exc:
+        logger.error("[LOCK] Lock acquisition failed model_id=%s: %s — continuing", model_id, exc)
+        return True  # fail-open
+
+
+def release_task_lock(model_id: str, task_name: str) -> None:
+    """Release the processing lock on task completion or permanent failure."""
+    import redis as redis_lib
+
+    lock_key = f"task_lock:{task_name}:{model_id}"
+    try:
+        r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+        r.delete(lock_key)
+        r.close()
+    except Exception as exc:
+        logger.warning("[LOCK] Failed to release lock model_id=%s: %s", model_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Webhook fan-out (sync) — Week 3 Day 2
+# ---------------------------------------------------------------------------
+#
+# The API's async dispatch_event() handles webhook fan-out for events
+# triggered by HTTP requests. Pipeline tasks run synchronously inside
+# Celery and need the equivalent fan-out without an asyncio event loop.
+# This mirrors app.services.webhooks.dispatch_event's query/filter logic
+# using the same sync engine pattern as the rest of this module.
+
+def dispatch_webhook_event(engine, event: str, payload: dict, user_id: str) -> None:
+    """
+    Find all active webhooks for a user subscribed to `event` and enqueue
+    delivery via Celery. Called by pipeline tasks on terminal completion
+    (e.g. "model.ready", "model.failed") — never called from the API layer
+    for processing-pipeline events, since the worker is the only component
+    that knows when processing has actually finished.
+    """
+    from celery import Celery
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            _raw_sql(
+                "SELECT id, events FROM webhooks "
+                "WHERE user_id = :uid AND is_active = true"
+            ),
+            {"uid": user_id},
+        ).fetchall()
+
+    celery_client = Celery(broker=settings.REDIS_URL)
+
+    for row in rows:
+        webhook_id, events = row[0], row[1]
+        if events and event in events:
+            celery_client.send_task(
+                "app.tasks.webhook.dispatch_webhook",
+                args=[str(webhook_id), event, payload],
+                queue="webhook",
+            )

@@ -1,13 +1,15 @@
+# apps/api/app/services/storage.py
+import os
 import re
 import uuid
 
 import boto3
 import filetype
 from botocore.config import Config as BotoConfig
-from celery import Celery
+from app.core.celery_client import get_celery_client
 
 from app.config import settings
-from app.core.exceptions import StorageException, ValidationException
+from app.core.exceptions import FileTooLargeException, StorageException, ValidationException
 
 ALLOWED_EXTENSIONS = {".ifc", ".gltf", ".glb", ".step", ".stp", ".obj", ".stl"}
 
@@ -37,10 +39,32 @@ def _get_s3_client():
     return _s3_client
 
 
+# ---------------------------------------------------------------------------
+# TEMP LOCAL STORAGE — helpers for local filesystem provider
+# REMOVE AFTER S3 CREDENTIALS AVAILABLE
+# ---------------------------------------------------------------------------
+
+def _local_raw_path(storage_key: str) -> str:
+    """Return the absolute local path for a raw upload key."""
+    return os.path.join(settings.LOCAL_STORAGE_PATH, "raw", storage_key)
+
+
+def _local_processed_path(storage_key: str) -> str:
+    """Return the absolute local path for a processed output key."""
+    return os.path.join(settings.LOCAL_STORAGE_PATH, "processed", storage_key)
+
+
+def _ensure_local_dir(path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+# END TEMP LOCAL STORAGE
+# ---------------------------------------------------------------------------
+
+
 def validate_filename(filename: str) -> str:
     if not filename or "\x00" in filename:
         raise ValidationException("Invalid filename")
-    
+
     if ".." in filename or "/" in filename or "\\" in filename:
         raise ValidationException("Invalid filename — path traversal detected")
 
@@ -52,7 +76,13 @@ def validate_filename(filename: str) -> str:
     if ".." in safe_name:
         raise ValidationException("Invalid filename — path traversal detected")
 
-    if not re.match(r"^[\w\-. ]+$", safe_name):
+    # Reject filenames with no stem (e.g. ".ifc" — just an extension)
+    if safe_name.startswith("."):
+        raise ValidationException("Invalid filename — must have a non-empty stem")
+
+    # Allow word chars, hyphens, dots, underscores, spaces, and parentheses.
+    # Parentheses are common in CAD exports: "Tower (Level 1).ifc"
+    if not re.match(r"^[\w\-. ()]+$", safe_name):
         raise ValidationException("Filename contains invalid characters")
 
     ext = "." + safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
@@ -69,16 +99,10 @@ def validate_file_size(size_bytes: int) -> None:
         raise ValidationException("File size must be greater than 0")
     if size_bytes > settings.MAX_UPLOAD_SIZE_BYTES:
         max_mb = settings.MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)
-        raise ValidationException(f"File exceeds maximum size of {max_mb}MB")
+        raise FileTooLargeException(f"File exceeds maximum size of {max_mb}MB")
 
 
 def validate_mime_type_declared(content_type: str) -> None:
-    """
-    Pre-upload check: validate the CLIENT-DECLARED content type before
-    issuing a presigned URL. This is a cheap first gate — the authoritative
-    check happens in validate_mime_type_from_bytes after upload, since a
-    client can lie about Content-Type in the presigned PUT request.
-    """
     if content_type not in ALLOWED_MIME_TYPES:
         raise ValidationException(
             f"Unsupported content type '{content_type}'. "
@@ -87,31 +111,10 @@ def validate_mime_type_declared(content_type: str) -> None:
 
 
 def validate_mime_type_from_bytes(header_bytes: bytes, declared_filename: str) -> str:
-    """
-    Authoritative MIME validation using filetype against actual file bytes
-    (magic numbers), not client-supplied headers. Called during /confirm
-    after downloading the first N bytes from S3.
-
-    Returns the detected MIME type. Raises ValidationException if the
-    detected type is implausible for the declared extension.
-
-    Note: IFC/STEP/OBJ files are plain-text formats (SPFF / Wavefront).
-    filetype returns None for these since they carry no binary magic bytes —
-    we resolve that to application/octet-stream, which is the same result
-    libmagic produces for these formats on many systems.
-
-    Binary formats (GLB, binary STL) are detected via their magic bytes.
-    """
-    # filetype.guess() inspects magic bytes with no system library dependency.
-    # Returns None when the byte signature is unrecognised (all text-based
-    # 3D formats fall into this category).
     guess = filetype.guess(header_bytes)
     detected = guess.mime if guess is not None else "application/octet-stream"
 
     ext = "." + declared_filename.rsplit(".", 1)[-1].lower()
-
-    # IFC, STEP, STP, OBJ are ASCII text formats — no binary magic bytes.
-    # filetype correctly returns None → we use application/octet-stream.
     text_based_formats = {".ifc", ".step", ".stp", ".obj"}
 
     if ext in text_based_formats:
@@ -139,7 +142,25 @@ def generate_presigned_upload_url(
     content_type: str,
     size_bytes: int,
     expires_in: int = 600,
-) -> str:
+) -> dict:
+    """
+    Generate a presigned S3 upload URL. In local mode returns a ``local://``
+    sentinel instead.
+
+    Returns a JSON-serialisable dict, always shaped the same way regardless
+    of storage provider:
+      {"url": str, "fields": dict}
+    ``fields`` is always {} — the client issues a single ``PUT`` request to
+    ``url`` with the file body and matching ``Content-Type`` header (S3 mode),
+    or uses the local-mode sentinel URL as-is.
+    """
+    # TEMP LOCAL STORAGE — return a local upload URL instead of S3 presigned URL
+    if settings.STORAGE_PROVIDER == "local":
+        local_path = _local_raw_path(storage_key)
+        _ensure_local_dir(local_path)
+        return {"url": f"local://{storage_key}", "fields": {}}
+    # END TEMP LOCAL STORAGE
+
     client = _get_s3_client()
     try:
         url = client.generate_presigned_url(
@@ -154,10 +175,21 @@ def generate_presigned_upload_url(
     except Exception as exc:
         raise StorageException(f"Failed to generate upload URL: {exc}")
 
-    return url
-
+    return {"url": url, "fields": {}}
 
 def verify_object_exists(storage_key: str) -> dict:
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        local_path = _local_raw_path(storage_key)
+        if not os.path.exists(local_path):
+            raise StorageException(
+                f"Upload not found in local storage: {local_path}. "
+                "In local mode, copy your file to this path before calling /confirm."
+            )
+        size = os.path.getsize(local_path)
+        return {"size_bytes": size, "content_type": "application/octet-stream"}
+    # END TEMP LOCAL STORAGE
+
     client = _get_s3_client()
     try:
         response = client.head_object(Bucket=settings.S3_RAW_BUCKET, Key=storage_key)
@@ -173,7 +205,16 @@ def verify_object_exists(storage_key: str) -> dict:
 
 
 def fetch_object_header_bytes(storage_key: str, num_bytes: int = 2048) -> bytes:
-    """Fetch the first N bytes of an S3 object for MIME sniffing without full download."""
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        local_path = _local_raw_path(storage_key)
+        try:
+            with open(local_path, "rb") as f:
+                return f.read(num_bytes)
+        except OSError as exc:
+            raise StorageException(f"Failed to read local file: {exc}")
+    # END TEMP LOCAL STORAGE
+
     client = _get_s3_client()
     try:
         response = client.get_object(
@@ -189,13 +230,9 @@ def fetch_object_header_bytes(storage_key: str, num_bytes: int = 2048) -> bytes:
 def trigger_clamav_scan(model_id: str, storage_key: str) -> None:
     """
     Enqueues the Celery ClamAV scan task.
-    Real clamd streaming scan is implemented in apps/worker/app/tasks/scan.py.
-    This function only dispatches; it does not block the confirm request.
-
     Task signature: scan_file(model_id: str, s3_key: str)
     """
-
-    celery_client = Celery(broker=settings.REDIS_URL)
+    celery_client = get_celery_client()
     celery_client.send_task(
         "app.tasks.scan.scan_file",
         args=[model_id, storage_key],
@@ -204,5 +241,10 @@ def trigger_clamav_scan(model_id: str, storage_key: str) -> None:
 
 
 def build_cdn_url(processed_key: str) -> str:
+    # TEMP LOCAL STORAGE — serve processed files via API /files/ route
+    if settings.STORAGE_PROVIDER == "local":
+        return f"/files/{processed_key}"
+    # END TEMP LOCAL STORAGE
+
     base = settings.CDN_BASE_URL.rstrip("/")
     return f"{base}/{processed_key}"

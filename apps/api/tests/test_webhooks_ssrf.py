@@ -1,0 +1,92 @@
+"""
+Tests for SSRF protection on webhook URLs (create + update).
+
+Covers: POST /v1/webhooks, PATCH /v1/webhooks/{id}
+  - public https URL is accepted
+  - non-https URL is rejected
+  - loopback / private / link-local hosts are rejected
+  - the same rules apply on update, not just create
+"""
+import pytest
+from httpx import AsyncClient
+
+pytestmark = pytest.mark.asyncio
+
+
+async def _register(client: AsyncClient, email: str) -> None:
+    await client.post(
+        "/v1/auth/register",
+        json={"email": email, "password": "testpass123", "full_name": "Test User"},
+    )
+
+
+class TestWebhookCreateSSRF:
+    async def test_accepts_public_https_url(self, client: AsyncClient, unique_email: str):
+        await _register(client, unique_email)
+        resp = await client.post(
+            "/v1/webhooks",
+            json={"url": "https://example.com/hook", "events": ["model.ready"]},
+        )
+        assert resp.status_code == 201
+
+    async def test_rejects_non_https_url(self, client: AsyncClient, unique_email: str):
+        await _register(client, unique_email)
+        resp = await client.post(
+            "/v1/webhooks",
+            json={"url": "http://example.com/hook", "events": ["model.ready"]},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://localhost/hook",
+            "https://127.0.0.1/hook",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://192.168.1.5/hook",
+            "https://10.0.0.5/hook",
+        ],
+    )
+    async def test_rejects_internal_hosts(
+        self, client: AsyncClient, unique_email: str, url: str
+    ):
+        await _register(client, unique_email)
+        resp = await client.post(
+            "/v1/webhooks",
+            json={"url": url, "events": ["model.ready"]},
+        )
+        assert resp.status_code == 422
+
+
+class TestWebhookUpdateSSRF:
+    async def test_update_rejects_internal_host(
+        self, client: AsyncClient, unique_email: str
+    ):
+        await _register(client, unique_email)
+        create_resp = await client.post(
+            "/v1/webhooks",
+            json={"url": "https://example.com/hook", "events": ["model.ready"]},
+        )
+        webhook_id = create_resp.json()["data"]["id"]
+
+        resp = await client.patch(
+            f"/v1/webhooks/{webhook_id}",
+            json={"url": "https://127.0.0.1/hook"},
+        )
+        assert resp.status_code == 422
+
+    async def test_update_accepts_public_https_url(
+        self, client: AsyncClient, unique_email: str
+    ):
+        await _register(client, unique_email)
+        create_resp = await client.post(
+            "/v1/webhooks",
+            json={"url": "https://example.com/hook", "events": ["model.ready"]},
+        )
+        webhook_id = create_resp.json()["data"]["id"]
+
+        resp = await client.patch(
+            f"/v1/webhooks/{webhook_id}",
+            json={"url": "https://example.org/hook"},
+        )
+        assert resp.status_code == 200

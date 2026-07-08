@@ -9,7 +9,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import httpx
+from httpx import AsyncClient
 
 pytestmark = pytest.mark.asyncio
 
@@ -34,7 +34,7 @@ def _mock_redis(current_count: int = 1, limit: int = 100):
 
 class TestRateLimitHeaders:
     async def test_rate_limit_headers_present_on_authed_request(
-        self, client: httpx.AsyncClient, unique_email: str
+        self, client: AsyncClient, unique_email: str
     ):
         """Every non-exempt authenticated response carries X-RateLimit-* headers."""
         await client.post(
@@ -53,7 +53,7 @@ class TestRateLimitHeaders:
         assert "X-RateLimit-Reset" in resp.headers
 
     async def test_rate_limit_remaining_decrements(
-        self, client: httpx.AsyncClient, unique_email: str
+        self, client: AsyncClient, unique_email: str
     ):
         """X-RateLimit-Remaining should reflect the current counter."""
         await client.post(
@@ -72,7 +72,7 @@ class TestRateLimitHeaders:
         assert remaining == 90
 
     async def test_rate_limit_reset_is_future_timestamp(
-        self, client: httpx.AsyncClient, unique_email: str
+        self, client: AsyncClient, unique_email: str
     ):
         await client.post(
             "/v1/auth/register",
@@ -96,7 +96,7 @@ class TestRateLimitHeaders:
 # ---------------------------------------------------------------------------
 
 class TestExemptPaths:
-    async def test_auth_register_exempt_from_rate_limiting(self, client: httpx.AsyncClient):
+    async def test_auth_register_exempt_from_rate_limiting(self, client: AsyncClient):
         """Auth endpoints must never return 429 — they are explicitly exempt."""
         import uuid
         email = f"exempt_{uuid.uuid4().hex[:8]}@example.com"
@@ -107,12 +107,12 @@ class TestExemptPaths:
         # Should succeed regardless of rate limit
         assert resp.status_code != 429
 
-    async def test_health_endpoint_exempt(self, client: httpx.AsyncClient):
+    async def test_health_endpoint_exempt(self, client: AsyncClient):
         resp = await client.get("/health")
         # If health exists it should not be rate-limited
         assert resp.status_code != 429
 
-    async def test_login_exempt(self, client: httpx.AsyncClient, unique_email: str):
+    async def test_login_exempt(self, client: AsyncClient, unique_email: str):
         await client.post(
             "/v1/auth/register",
             json={"email": unique_email, "password": "testpass123"},
@@ -130,7 +130,7 @@ class TestExemptPaths:
 
 class TestFreeTierLimits:
     async def test_exceeding_free_limit_returns_429(
-        self, client: httpx.AsyncClient, unique_email: str
+        self, client: AsyncClient, unique_email: str
     ):
         """When Redis counter exceeds the free tier limit, the middleware returns 429."""
         await client.post(
@@ -148,7 +148,7 @@ class TestFreeTierLimits:
         assert resp.status_code == 429
 
     async def test_429_response_has_correct_error_code(
-        self, client: httpx.AsyncClient, unique_email: str
+        self, client: AsyncClient, unique_email: str
     ):
         await client.post(
             "/v1/auth/register",
@@ -167,7 +167,7 @@ class TestFreeTierLimits:
         assert "error" in body
 
     async def test_pro_tier_not_limited_at_free_threshold(
-        self, client: httpx.AsyncClient, unique_email: str
+        self, client: AsyncClient, unique_email: str
     ):
         """Pro user at count=101 should NOT be rate-limited (pro limit is 10000)."""
         await client.post(
@@ -184,7 +184,7 @@ class TestFreeTierLimits:
         assert resp.status_code != 429
 
     async def test_enterprise_tier_never_limited(
-        self, client: httpx.AsyncClient, unique_email: str
+        self, client: AsyncClient, unique_email: str
     ):
         """Enterprise tier has no limit — X-RateLimit-Limit should be 'unlimited'."""
         await client.post(

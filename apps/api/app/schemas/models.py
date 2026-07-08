@@ -27,6 +27,12 @@ class ModelUploadRequest(BaseModel):
         le=500 * 1024 * 1024,
         description="File size in bytes. Max 500MB.",
     )
+    name: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional display name; defaults to filename if omitted.",
+        examples=["Main Tower — Structural"],
+    )
 
     @field_validator("filename")
     @classmethod
@@ -42,18 +48,22 @@ class ModelUploadRequest(BaseModel):
 class ModelUploadResponse(BaseModel):
     model_id: uuid.UUID
     upload_url: str
+    upload_fields: dict = {}  # S3 POST form fields; empty for local mode
     storage_key: str
-
 
 class ModelResponse(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
     uploaded_by: uuid.UUID
     original_filename: str
+    name: str | None = None
     file_format: str
     status: str
     file_size_bytes: int | None
     error_message: str | None
+    element_count: int | None = None
+    bounds_min_xyz: list[float] | None = None
+    bounds_max_xyz: list[float] | None = None
     created_at: datetime
     updated_at: datetime
 

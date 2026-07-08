@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundException, ValidationException
+from app.core.exceptions import NotFoundException, UnsupportedFormatException, ValidationException
 from app.models.model import Model
 from app.models.model_element import ModelElement
 from app.models.model_metadata import ModelMetadata
@@ -14,17 +14,20 @@ from app.schemas.models import (
     ModelResponse,
     ModelUploadRequest,
 )
+
+import app.services.storage as _storage_svc
+
 from app.services.storage import (
     build_storage_key,
     fetch_object_header_bytes,
     generate_presigned_upload_url,
-    trigger_clamav_scan,
     validate_file_size,
     validate_filename,
     validate_mime_type_declared,
     validate_mime_type_from_bytes,
     verify_object_exists,
 )
+
 from app.core.redis import publish_model_event
 from app.services.webhooks import dispatch_event
 
@@ -102,7 +105,7 @@ async def initiate_upload(
     ext = "." + safe_filename.rsplit(".", 1)[-1].lower()
     file_format = EXT_TO_FORMAT.get(ext)
     if not file_format:
-        raise ValidationException(f"Unsupported file format: {ext}")
+        raise UnsupportedFormatException(f"Unsupported file format: {ext}")
 
     model_id = uuid.uuid4()
     storage_key = build_storage_key(user_id, model_id, safe_filename)
@@ -112,6 +115,7 @@ async def initiate_upload(
         project_id=data.project_id,
         uploaded_by=user_id,
         original_filename=safe_filename,
+        name=data.name or safe_filename,
         file_format=file_format,
         s3_raw_key=storage_key,
         file_size_bytes=data.size_bytes,
@@ -161,35 +165,28 @@ async def confirm_upload(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse
     model.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(model)
-
-    # ClamAV scan dispatched first (scan queue), processing task dispatched after.
-    # Parallel dispatch: scan runs independently; processing continues regardless.
-    trigger_clamav_scan(str(model.id), model.s3_raw_key)
-    _enqueue_processing_task(model)
-
+    
+    _storage_svc.trigger_clamav_scan(str(model.id), model.s3_raw_key)
 
     await publish_model_event(
-        str(model.uploaded_by), "model:sync", {"model_id": str(model.id), "status": "processing"}
-    )
-    await dispatch_event(
-        "model.ready", {"model_id": str(model.id)}, model.uploaded_by, db
+        str(model.uploaded_by),
+        "model:sync",
+        {"model_id": str(model.id), "status": "processing"},
     )
 
     return ModelResponse.model_validate(model)
 
 
-def _enqueue_processing_task(model: Model) -> None:
-    from celery import Celery
-    from app.config import settings as api_settings
-
-    celery_client = Celery(broker=api_settings.REDIS_URL)
-
-    task_name = (
-        "app.tasks.ifc.process_model"
-        if model.file_format == "ifc"
-        else "app.tasks.mesh.generate_chunks"
-    )
-    celery_client.send_task(task_name, args=[str(model.id)])
+def _enqueue_processing_task(model: "Model") -> None:  # noqa: F821
+    """
+    Patchable seam used by tests to intercept processing dispatch.
+    In production this function is never called directly — the scan task
+    (app.tasks.scan.scan_file) dispatches the processing task after
+    confirming the file is clean. Kept here so tests can patch it at
+    ``app.services.models._enqueue_processing_task`` without error.
+    """
+    # No-op in production — dispatch happens in scan task.
+    pass
 
 
 async def get_model(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse:

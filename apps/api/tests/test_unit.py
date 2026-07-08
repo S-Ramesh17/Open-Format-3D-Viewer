@@ -14,7 +14,22 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from app.core.exceptions import ValidationException
+from app.services.storage import (
+    validate_filename,
+    validate_file_size,
+    validate_mime_type_declared,
+    validate_mime_type_from_bytes,
+    build_storage_key,
+    build_cdn_url,
+    trigger_clamav_scan,
+)
 
+import io
+import zipfile
+
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 # ---------------------------------------------------------------------------
 # sanitize.py
 # ---------------------------------------------------------------------------
@@ -72,16 +87,6 @@ class TestSanitizeText:
 # storage.py — validation
 # ---------------------------------------------------------------------------
 
-from app.core.exceptions import ValidationException
-from app.services.storage import (
-    validate_filename,
-    validate_file_size,
-    validate_mime_type_declared,
-    validate_mime_type_from_bytes,
-    build_storage_key,
-    build_cdn_url,
-    trigger_clamav_scan,
-)
 
 
 class TestValidateFilename:
@@ -198,26 +203,38 @@ class TestBuildStorageKey:
 
 
 class TestBuildCdnUrl:
-    def test_cdn_url_format(self):
-        from app.config import settings
-        key = "processed/abc/model.xkt"
-        url = build_cdn_url(key)
-        base = settings.CDN_BASE_URL.rstrip("/")
-        assert url == f"{base}/{key}"
+    def test_local_storage_url(self):
+        with patch("app.services.storage.settings") as mock_settings:
+            mock_settings.STORAGE_PROVIDER = "local"
+
+            url = build_cdn_url("processed/abc/model.xkt")
+
+            assert url == "/files/processed/abc/model.xkt"
+
+    def test_s3_storage_url(self):
+        with patch("app.services.storage.settings") as mock_settings:
+            mock_settings.STORAGE_PROVIDER = "s3"
+            mock_settings.CDN_BASE_URL = "https://cdn.example.com"
+
+            url = build_cdn_url("processed/abc/model.xkt")
+
+            assert url == "https://cdn.example.com/processed/abc/model.xkt"
 
     def test_trailing_slash_stripped(self):
         with patch("app.services.storage.settings") as mock_settings:
+            mock_settings.STORAGE_PROVIDER = "s3"
             mock_settings.CDN_BASE_URL = "https://cdn.example.com/"
-            url = build_cdn_url("path/to/file.xkt")
-        assert "cdn.example.com//path" not in url
 
+            url = build_cdn_url("path/to/file.xkt")
+
+            assert url == "https://cdn.example.com/path/to/file.xkt"
 
 class TestTriggerClamavScan:
     def test_dispatches_with_both_args(self):
         """Regression: trigger_clamav_scan must pass model_id AND storage_key."""
-        with patch("app.services.storage.Celery") as mock_celery_cls:
+        with patch("app.services.storage.get_celery_client") as mock_get_client:
             mock_celery_instance = MagicMock()
-            mock_celery_cls.return_value = mock_celery_instance
+            mock_get_client.return_value = mock_celery_instance
 
             trigger_clamav_scan("model-id-123", "user/model/file.ifc")
 
@@ -234,13 +251,6 @@ class TestTriggerClamavScan:
 # ---------------------------------------------------------------------------
 # bcf_export.py
 # ---------------------------------------------------------------------------
-
-import io
-import zipfile
-
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession
-
 
 class TestBcfExport:
     """Unit-level tests for BCF export; mock the DB queries."""
@@ -380,3 +390,69 @@ class TestPaginationHelpers:
         cursor = _encode_cursor(ts, uid)
         decoded_ts, decoded_uid = _decode_cursor(cursor)
         assert decoded_uid == uid
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 3 — Path traversal, MIME, and validate_filename
+# ---------------------------------------------------------------------------
+
+class TestValidateFilenameDay3:
+    """Path traversal and filename edge cases found during Day 3 audit."""
+
+    def _validate(self, filename):
+        from app.services.storage import validate_filename
+        return validate_filename(filename)
+
+    def test_empty_stem_rejected(self):
+        """'.ifc' has no stem and must be rejected."""
+        with pytest.raises(ValidationException):
+            self._validate(".ifc")
+
+    def test_parentheses_allowed(self):
+        """CAD tools commonly produce filenames like 'Tower (Level 1).ifc'."""
+        result = self._validate("Tower (Level 1).ifc")
+        assert result == "Tower (Level 1).ifc"
+
+    def test_parentheses_in_glb(self):
+        result = self._validate("Building A (Draft).glb")
+        assert result == "Building A (Draft).glb"
+
+    def test_path_traversal_unix(self):
+        with pytest.raises(ValidationException):
+            self._validate("../etc/passwd.ifc")
+
+    def test_path_traversal_windows(self):
+        with pytest.raises(ValidationException):
+            self._validate("C:\\Windows\\secret.ifc")
+
+    def test_path_traversal_absolute_unix(self):
+        with pytest.raises(ValidationException):
+            self._validate("/etc/shadow.ifc")
+
+    def test_null_byte(self):
+        with pytest.raises(ValidationException):
+            self._validate("foo\x00bar.ifc")
+
+    def test_percent_encoded_slash_caught_after_url_decode(self):
+        """Percent-encoded traversal is decoded by HTTP layer before reaching this fn."""
+        from urllib.parse import unquote
+        decoded = unquote("..%2Fetc%2Fpasswd.ifc")
+        with pytest.raises(ValidationException):
+            self._validate(decoded)
+
+    def test_double_extension_allowed(self):
+        """shell.php.ifc — last extension is .ifc, we allow it (extension whitelist wins)."""
+        result = self._validate("shell.php.ifc")
+        assert result == "shell.php.ifc"
+
+    def test_all_dots_rejected(self):
+        with pytest.raises(ValidationException):
+            self._validate("....ifc")
+
+    def test_valid_filename_passes(self):
+        result = self._validate("my_model-v2.step")
+        assert result == "my_model-v2.step"
+
+    def test_unsupported_extension_rejected(self):
+        with pytest.raises(ValidationException):
+            self._validate("script.exe")

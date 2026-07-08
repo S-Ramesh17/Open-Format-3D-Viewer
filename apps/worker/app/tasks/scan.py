@@ -4,7 +4,8 @@ ClamAV scan task — streams S3 object through clamd, quarantines on infection.
 Flow:
   1. Download raw file from S3 to a temp file
   2. Stream file bytes through clamd TCP socket (INSTREAM command)
-  3. If clean  → update model status → "processing" (hand-off to processing queue)
+  3. If clean    → dispatch the IFC/mesh processing task (gates processing
+                   on scan result — see Week 3 Day 3 race condition fix)
   4. If infected → update model status → "failed", delete S3 object,
                    publish Redis failure event
   5. Celery retries on transient clamd / S3 errors (up to 3 times)
@@ -12,14 +13,12 @@ Flow:
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import os
 import socket
 import struct
 import tempfile
-from typing import Iterator
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -29,8 +28,7 @@ from app.config import settings
 from app.tasks.common import (
     get_model_row,
     get_sync_engine,
-    update_model_status,
-    publish_model_failed,
+    update_model_status
 )
 
 logger = logging.getLogger(__name__)
@@ -55,26 +53,49 @@ def _s3_client():
 
 
 def _download_to_temp(s3_key: str) -> str:
-    """Download S3 raw object to a temp file. Returns the local path."""
+    """Download raw file (S3 or local) to a temp file. Returns the local path."""
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        import shutil
+        local_src = os.path.join(settings.LOCAL_STORAGE_PATH, "raw", s3_key)
+        logger.info("[SCAN][LOCAL] Copying %s for scan", local_src)
+        if not os.path.exists(local_src):
+            raise FileNotFoundError(
+                f"Local raw file not found for scan: {local_src}"
+            )
+        fd, path = tempfile.mkstemp(prefix="scan_", suffix=".bin")
+        os.close(fd)
+        shutil.copy2(local_src, path)
+        return path
+    # END TEMP LOCAL STORAGE
+
     s3 = _s3_client()
-    # mkstemp — caller is responsible for deletion (TemporaryDirectory handles it)
     fd, path = tempfile.mkstemp(prefix="scan_", suffix=".bin")
     os.close(fd)
     logger.info("[SCAN] Downloading s3://%s/%s → %s", settings.S3_RAW_BUCKET, s3_key, path)
     s3.download_file(settings.S3_RAW_BUCKET, s3_key, path)
     return path
 
-
 def _delete_s3_object(s3_key: str) -> None:
-    """Delete an infected object from the raw bucket."""
+    """Delete an infected object from raw storage (S3 or local)."""
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        local_path = os.path.join(settings.LOCAL_STORAGE_PATH, "raw", s3_key)
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+                logger.warning("[SCAN][LOCAL] Deleted infected local file: %s", local_path)
+        except OSError as exc:
+            logger.error("[SCAN][LOCAL] Failed to delete infected file %s: %s", local_path, exc)
+        return
+    # END TEMP LOCAL STORAGE
+
     s3 = _s3_client()
     try:
         s3.delete_object(Bucket=settings.S3_RAW_BUCKET, Key=s3_key)
         logger.warning("[SCAN] Deleted infected S3 object: %s", s3_key)
     except Exception as exc:
         logger.error("[SCAN] Failed to delete infected object %s: %s", s3_key, exc)
-
-
 # ---------------------------------------------------------------------------
 # ClamAV INSTREAM protocol
 # ---------------------------------------------------------------------------
@@ -159,6 +180,29 @@ def _publish_scan_failure(user_id: str, model_id: str, virus_name: str) -> None:
         logger.error("[SCAN] Failed to publish scan failure event: %s", exc)
 
 
+def _dispatch_processing_task(model_id: str, file_format: str | None) -> None:
+    """
+    Dispatch the correct processing task once the scan confirms the file
+    is clean. IFC goes to its dedicated task/queue; everything else routes
+    through the mesh queue's format router (app.tasks.mesh.generate_chunks).
+
+    This is the single gate for starting processing — no other code path
+    in the API or worker should dispatch ifc.process_model or
+    mesh.generate_chunks directly for a freshly uploaded model.
+    """
+    task_name = (
+        "app.tasks.ifc.process_model"
+        if file_format == "ifc"
+        else "app.tasks.mesh.generate_chunks"
+    )
+    queue = "ifc" if file_format == "ifc" else "mesh"
+    celery_app.send_task(task_name, args=[model_id], queue=queue)
+    logger.info(
+        "[SCAN] Clean scan — dispatched %s for model_id=%s (queue=%s)",
+        task_name, model_id, queue,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main Celery task
 # ---------------------------------------------------------------------------
@@ -190,17 +234,18 @@ def scan_file(self, model_id: str, s3_key: str) -> dict:
 
     engine = get_sync_engine()
 
-    # Fetch model to get the owner for Redis events
+    # Fetch model to get the owner for Redis events and file_format for routing
     model = get_model_row(engine, model_id)
     if model is None:
         logger.error("[SCAN] Model %s not found — skipping scan", model_id)
         return {"model_id": model_id, "status": "skipped", "reason": "model_not_found"}
 
     user_id = str(model["uploaded_by"])
+    file_format = model.get("file_format")
 
     try:
-        with tempfile.TemporaryDirectory(prefix="clamd_") as tmpdir:
-            # Download file from S3
+        with tempfile.TemporaryDirectory(prefix="clamd_"):
+            # Download file from S3 / local storage
             local_path = _download_to_temp(s3_key)
 
             try:
@@ -213,11 +258,17 @@ def scan_file(self, model_id: str, s3_key: str) -> dict:
                     pass
 
         if is_clean:
-            logger.info("[SCAN] Clean scan for model_id=%s", model_id)
+            logger.info("[SCAN] Clean scan for model_id=%s — dispatching processing", model_id)
+            # GATE: dispatch processing only after confirmed clean scan.
+            # Before Week 3 Day 3, the API dispatched both scan and processing
+            # simultaneously, creating a race where infected files could reach
+            # "ready" status with processed chunks in S3 before scan finished.
+            _dispatch_processing_task(model_id, file_format)
             return {
                 "model_id": model_id,
                 "s3_key": s3_key,
                 "status": "clean",
+                "dispatched": file_format,
             }
 
         # ── INFECTED ──────────────────────────────────────────────────────
