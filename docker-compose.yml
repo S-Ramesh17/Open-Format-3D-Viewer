@@ -74,8 +74,39 @@ services:
       REDIS_URL: redis://redis:6379/0
       STORAGE_PROVIDER: local
       LOCAL_STORAGE_PATH: /data/openformat
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
+    tmpfs:
+      - /tmp/prometheus_multiproc
+    ports:
+      - "9090:9090"
     volumes:
       - uploads_data:/data/openformat
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Wait for the api container's healthcheck, not just for it to start.
+      # api's entrypoint runs `alembic upgrade head` before it becomes
+      # healthy, so this guarantees the worker never queries a schema
+      # that hasn't been migrated yet.
+      api:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: apps/worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: apps/worker/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://openformat:openformat@postgres:5432/openformat
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PROVIDER: local
+      LOCAL_STORAGE_PATH: /data/openformat
+    command: celery -A app.celery_app.celery_app beat --loglevel=info
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,6 +127,7 @@ services:
       REDIS_URL: redis://redis:6379/0
     ports:
       - "8001:8001"
+      - "9091:9091"
     depends_on:
       redis:
         condition: service_healthy

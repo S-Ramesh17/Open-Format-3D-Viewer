@@ -14,7 +14,7 @@ import os
 import threading
 from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, REGISTRY
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, REGISTRY, CollectorRegistry, multiprocess
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,12 @@ class _SilentHandler(WSGIRequestHandler):
 def _metrics_app(environ, start_response):
     path = environ.get("PATH_INFO", "")
     if path == "/metrics":
-        output = generate_latest(REGISTRY)
+        if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+            registry = CollectorRegistry()
+            multiprocess.MultiProcessCollector(registry)
+        else:
+            registry = REGISTRY
+        output = generate_latest(registry)
         status = "200 OK"
         headers = [("Content-Type", CONTENT_TYPE_LATEST)]
     elif path == "/health":

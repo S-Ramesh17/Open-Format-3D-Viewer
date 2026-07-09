@@ -105,9 +105,9 @@ function verifyToken(token) {
 function send(socket, message) {
   if (socket.readyState === 1 /* OPEN */) {
     socket.send(JSON.stringify(message));
-    messagesSent.inc();  // ADD THIS
+    messagesSent.inc();
   } else {
-    messagesDropped.inc();  // ADD THIS (replace the implicit drop)
+    messagesDropped.inc();
   }
 }
 
@@ -204,19 +204,18 @@ connectedClients.inc();
   });
 
   subscriber.on('message', (channel, message) => {
-    redisEventsReceived.inc();  // ADD
+    redisEventsReceived.inc();
     if (channel !== redisChannel) return;
     if (client.socket.readyState === 1) {
       client.socket.send(message);
       messagesSent.inc();
     } else {
       messagesDropped.inc();
-      // existing warn log...
     }
   });
 
   subscriber.on('error', (err) => {
-    redisPublishFailures.inc();  // ADD
+    redisPublishFailures.inc();
     fastify.log.warn({ err, userId }, 'Subscriber Redis error');
   });
 
@@ -346,8 +345,8 @@ connectedClients.inc();
     subscriber.quit().catch(() => {});
 
     fastify.log.info({ userId }, 'WebSocket disconnected');
+    connectedClients.dec();
   }
-  connectedClients.dec();
   socket.on('close', cleanup);
   socket.on('error', (err) => {
     fastify.log.warn({ userId, err: err.message }, 'WebSocket error');
@@ -367,20 +366,7 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-/**
- * Cursor throttle — enforces max 10 CURSOR_MOVE broadcasts per second per client.
- * Uses a simple timestamp gate on the client object (no Redis — per-pod is correct
- * since cursor positions are ephemeral and not worth cross-pod consistency).
- * Returns true if the event should be forwarded, false if it should be dropped.
- */
-function _throttleCursor(client) {
-  const now = Date.now();
-  if (!client.lastCursorAt || (now - client.lastCursorAt) >= CURSOR_THROTTLE_MS) {
-    client.lastCursorAt = now;
-    return true;
-  }
-  return false;
-}
+
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
