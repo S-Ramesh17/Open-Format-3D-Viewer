@@ -1,5 +1,13 @@
-### Response Format
+## Local Development
 
+```bash
+./scripts/setup-dev-env.sh
+docker compose up -d
+```
+
+---
+
+### Response Format
 All responses follow a standard envelope:
 
 **Success**

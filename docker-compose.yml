@@ -37,7 +37,9 @@ services:
       context: apps/api
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: apps/api/.env
+    env_file:
+      - path: apps/api/.env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://openformat:openformat@postgres:5432/openformat
       REDIS_URL: redis://redis:6379/0
@@ -64,7 +66,9 @@ services:
       context: apps/worker
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: apps/worker/.env
+    env_file:
+      - path: apps/worker/.env
+        required: false
     environment:
       DATABASE_URL: postgresql://openformat:openformat@postgres:5432/openformat
       REDIS_URL: redis://redis:6379/0
@@ -77,13 +81,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_healthy
 
   ws-server:
     build:
       context: apps/ws-server
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: apps/ws-server/.env
+    env_file:
+      - path: apps/ws-server/.env
+        required: false
     environment:
       REDIS_URL: redis://redis:6379/0
     ports:
