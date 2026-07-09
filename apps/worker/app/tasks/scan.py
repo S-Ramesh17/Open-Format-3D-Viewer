@@ -166,7 +166,7 @@ def _publish_scan_failure(user_id: str, model_id: str, virus_name: str) -> None:
         r.publish(
             f"model_events:{user_id}",
             json.dumps({
-                "event": "model:failed",
+                "event": "MODEL_FAILED",
                 "data": {
                     "model_id": model_id,
                     "error": f"File rejected by antivirus scan: {virus_name}",

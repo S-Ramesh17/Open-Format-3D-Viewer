@@ -59,7 +59,7 @@ async def create_annotation(
 
     await publish_model_event(
         str(user_id),
-        "annotation:update",
+        "ANNOTATION_UPDATED",
         {"annotation_id": str(annotation.id), "model_id": str(model_id), "action": "created"},
     )
     await dispatch_event(
@@ -142,6 +142,13 @@ async def update_annotation(
     annotation.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(annotation)
+
+    await publish_model_event(
+        str(annotation.created_by),
+        "ANNOTATION_UPDATED",
+        {"annotation_id": str(annotation.id), "model_id": str(annotation.model_id), "action": "updated", "status": annotation.status},
+    )
+
     return AnnotationResponse.model_validate(annotation)
 
 

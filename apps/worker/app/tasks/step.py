@@ -358,7 +358,9 @@ def process_step(self: Task, model_id: str) -> dict:
             )
 
             # ── 12. Publish Redis event ────────────────────────────────────
-            publish_model_ready(user_id, model_id)
+            base_cdn = settings.CDN_BASE_URL.rstrip("/")
+            chunk_urls = [f"{base_cdn}/{k}" for k in uploaded_keys]
+            publish_model_ready(user_id, model_id, chunk_urls)
             publish_model_progress(user_id, model_id, 100, "ready")
             dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
 

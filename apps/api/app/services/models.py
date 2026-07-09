@@ -196,7 +196,7 @@ async def confirm_upload(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse
 
     await publish_model_event(
         str(model.uploaded_by),
-        "model:sync",
+        "MODEL_SYNC",
         {"model_id": str(model.id), "status": "processing"},
     )
 

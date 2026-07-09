@@ -283,7 +283,9 @@ def process_obj(self: Task, model_id: str) -> dict:
             # ── Update status + publish ────────────────────────────────────
             stage = "finalize"
             update_model_status(engine, model_id, "ready", s3_processed_prefix=processed_prefix)
-            publish_model_ready(user_id, model_id)
+            base_cdn = settings.CDN_BASE_URL.rstrip("/")
+            chunk_urls = [f"{base_cdn}/{k}" for k in uploaded_keys]
+            publish_model_ready(user_id, model_id, chunk_urls)
             dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
 
             logger.info("[OBJ] Processing complete for model_id=%s", model_id)

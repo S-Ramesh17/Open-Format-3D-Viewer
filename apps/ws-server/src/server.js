@@ -156,7 +156,7 @@ fastify.get('/health', async () => {
 // ---------------------------------------------------------------------------
 // WebSocket handler
 // ---------------------------------------------------------------------------
-fastify.get('/ws', { websocket: true }, (socket, req) => {
+fastify.get('/v1/ws', { websocket: true }, (socket, req) => {
   const token = req.query?.token;
   const userId = verifyToken(token);
 
@@ -320,8 +320,8 @@ connectedClients.inc();
         if (client.pongTimer) clearTimeout(client.pongTimer);
         break;
       }
-      case 'annotation:update':
-      case 'model:sync': {
+      case 'ANNOTATION_UPDATED':
+      case 'MODEL_SYNC': {
         if (currentModelId) {
           broadcast(currentModelId, { event: msg.event, userId, data: msg.data }, client);
           roomBroadcasts.labels({ event_type: msg.event }).inc();

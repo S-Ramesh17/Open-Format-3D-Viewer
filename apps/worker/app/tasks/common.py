@@ -203,13 +203,20 @@ def upsert_model_metadata(
 # Redis pub/sub
 # ---------------------------------------------------------------------------
 
-def publish_model_ready(user_id: str, model_id: str) -> None:
-    """Publish model:ready event to the ws-server relay channel."""
+def publish_model_ready(user_id: str, model_id: str, chunk_urls: list[str] = None) -> None:
+    """Publish MODEL_READY event to the ws-server relay channel."""
     import redis as redis_lib
 
     channel = f"model_events:{user_id}"
     payload = json.dumps(
-        {"event": "model:ready", "data": {"model_id": model_id, "status": "ready"}}
+        {
+            "event": "MODEL_READY",
+            "data": {
+                "model_id": model_id,
+                "status": "ready",
+                "chunk_urls": chunk_urls if chunk_urls is not None else []
+            }
+        }
     )
     try:
         r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
@@ -221,7 +228,7 @@ def publish_model_ready(user_id: str, model_id: str) -> None:
 
 
 def publish_model_failed(user_id: str, model_id: str, error: str) -> None:
-    """Publish model:failed event to the ws-server relay channel."""
+    """Publish MODEL_FAILED event to the ws-server relay channel."""
     import redis as redis_lib
 
     try:
@@ -230,7 +237,7 @@ def publish_model_failed(user_id: str, model_id: str, error: str) -> None:
             f"model_events:{user_id}",
             json.dumps(
                 {
-                    "event": "model:failed",
+                    "event": "MODEL_FAILED",
                     "data": {"model_id": model_id, "error": error[:500]},
                 }
             ),
@@ -247,7 +254,7 @@ def publish_model_failed(user_id: str, model_id: str, error: str) -> None:
 import subprocess  # noqa: E402  (placed after logger setup intentionally)
 def publish_model_progress(user_id: str, model_id: str, percent: int, stage: str = "") -> None:
     """
-    Publish a model:progress event to the ws-server relay channel.
+    Publish a MODEL_PROGRESS event to the ws-server relay channel.
     percent: 0–100
     stage: human-readable stage name e.g. "download", "convert", "upload"
     """
@@ -255,7 +262,7 @@ def publish_model_progress(user_id: str, model_id: str, percent: int, stage: str
 
     channel = f"model_events:{user_id}"
     payload = json.dumps({
-        "event": "model:progress",
+        "event": "MODEL_PROGRESS",
         "data": {
             "model_id": model_id,
             "percent": percent,

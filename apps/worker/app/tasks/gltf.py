@@ -284,8 +284,10 @@ def process_gltf(self: Task, model_id: str) -> dict:
                 s3_processed_prefix=processed_prefix,
             )
 
-            # ── 9. Publish Redis event ─────────────────────────────────────
-            publish_model_ready(user_id, model_id)
+           # ── 9. Publish Redis event ─────────────────────────────────────
+            base_cdn = settings.CDN_BASE_URL.rstrip("/")
+            chunk_urls = [f"{base_cdn}/{k}" for k in uploaded_keys]
+            publish_model_ready(user_id, model_id, chunk_urls)
             dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
 
             logger.info("[GLTF] Processing complete for model_id=%s", model_id)

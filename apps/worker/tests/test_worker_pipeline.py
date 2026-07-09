@@ -306,7 +306,7 @@ class TestRedisEventFlow:
         assert len(published_payloads) == 1
         channel, payload = published_payloads[0]
         assert channel == f"model_events:{user_id}"
-        assert payload["event"] == "model:ready"
+        assert payload["event"] == "MODEL_READY"
         assert payload["data"]["model_id"] == model_id
 
     def test_publish_model_failed_sends_correct_payload(self):
@@ -326,7 +326,7 @@ class TestRedisEventFlow:
 
         assert len(published_payloads) == 1
         channel, payload = published_payloads[0]
-        assert payload["event"] == "model:failed"
+        assert payload["event"] == "MODEL_FAILED"
         assert payload["data"]["error"] == "conversion failed"
 
     def test_redis_unavailable_does_not_raise(self):
