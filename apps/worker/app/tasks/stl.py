@@ -30,12 +30,15 @@ from celery.exceptions import SoftTimeLimitExceeded
 from app.celery_app import celery_app
 from app.config import settings
 from app.tasks.common import (
+    acquire_task_lock,
     dispatch_webhook_event,
     download_raw_file,
     get_model_row,
     get_sync_engine,
+    is_already_processed,
     publish_model_progress,
     publish_model_ready,
+    release_task_lock,
     run_node_tool,
     split_binary_chunks,
     update_model_status,
@@ -249,18 +252,20 @@ def process_stl(self: Task, model_id: str) -> dict:
 
     engine = get_sync_engine()
 
+    # ── Idempotency guard — skip if already terminal (redelivery) ──────────
+    if is_already_processed(engine, model_id):
+        logger.info("[STL] model_id=%s already in terminal status — skipping redelivered task", model_id)
+        return {"model_id": model_id, "skipped": "already_processed"}
+
+    # ── Redis lock — prevent duplicate concurrent execution ───────────────
+    if not acquire_task_lock(model_id, "app.tasks.stl.process_stl"):
+        return {"model_id": model_id, "status": "skipped", "reason": "duplicate_task"}
+
     model = get_model_row(engine, model_id)
     if model is None:
         logger.error("[STL] Model %s not found in DB", model_id)
+        release_task_lock(model_id, "app.tasks.stl.process_stl")
         return {"error": "model_not_found", "model_id": model_id}
-
-    # ── Idempotency guard — skip if already terminal (redelivery) ──────────
-    if model.get("status") in ("ready", "failed"):
-        logger.info(
-            "[STL] model_id=%s already in terminal status=%s — skipping redelivered task",
-            model_id, model.get("status"),
-        )
-        return {"model_id": model_id, "status": model.get("status"), "skipped": "already_processed"}
 
     user_id = str(model["uploaded_by"])
     s3_raw_key = model["s3_raw_key"]
@@ -349,6 +354,7 @@ def process_stl(self: Task, model_id: str) -> dict:
             chunk_urls = [f"{base_cdn}/{k}" for k in uploaded_keys]
             publish_model_ready(user_id, model_id, chunk_urls)
             dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
+            release_task_lock(model_id, "app.tasks.stl.process_stl")
 
             logger.info("[STL] Processing complete for model_id=%s", model_id)
             return {
@@ -363,11 +369,13 @@ def process_stl(self: Task, model_id: str) -> dict:
 
         except SoftTimeLimitExceeded:
             logger.error("[STL] Soft time limit exceeded at stage=%s", stage)
+            release_task_lock(model_id, "app.tasks.stl.process_stl")
             return handle_task_failure(engine, model_id, user_id, stage, SoftTimeLimitExceeded("soft time limit"))
 
         except Exception as exc:
             logger.exception("[STL] Failed at stage=%s for model_id=%s", stage, model_id)
             result = handle_task_failure(engine, model_id, user_id, stage, exc)
+            release_task_lock(model_id, "app.tasks.stl.process_stl")
             if is_retryable(exc):
                      raise self.retry(
                             exc=exc,

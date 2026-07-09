@@ -40,6 +40,7 @@ from app.tasks.common import (
     download_raw_file,
     get_sync_engine,
     get_model_row,
+    is_already_processed,
     release_task_lock,
     update_model_status,
     upsert_model_metadata,
@@ -396,23 +397,21 @@ def process_model(self: Task, model_id: str) -> dict:
     _task_start = __import__('time').monotonic()
     ACTIVE_TASKS.labels(task_name="ifc.process_model").inc()
     try:
-        # ── 1. Fetch model row ────────────────────────────────────────────────
+        # ── 1. Idempotency guard — skip if already terminal (redelivery) ──────
+        if is_already_processed(engine, model_id):
+            logger.info("[IFC] model_id=%s already in terminal status — skipping redelivered task", model_id)
+            return {"model_id": model_id, "skipped": "already_processed"}
+
+        # ── 1b. Redis lock — prevent duplicate concurrent execution ──────────
+        if not acquire_task_lock(model_id, "app.tasks.ifc.process_model"):
+            return {"model_id": model_id, "status": "skipped", "reason": "duplicate_task"}
+
+        # ── 1c. Fetch model row ────────────────────────────────────────────────
         model = get_model_row(engine, model_id)
         if model is None:
             logger.error("[IFC] Model %s not found in DB", model_id)
+            release_task_lock(model_id, "app.tasks.ifc.process_model")
             return {"error": "model_not_found", "model_id": model_id}
-
-        # ── 1b. Idempotency guard — skip if already terminal (redelivery) ──────
-        if model.get("status") in ("ready", "failed"):
-            logger.info(
-                "[IFC] model_id=%s already in terminal status=%s — skipping redelivered task",
-                model_id, model.get("status"),
-            )
-            return {"model_id": model_id, "status": model.get("status"), "skipped": "already_processed"}
-
-        # ── 1c. Redis lock — prevent duplicate concurrent execution ──────────
-        if not acquire_task_lock(model_id, "app.tasks.ifc.process_model"):
-            return {"model_id": model_id, "status": "skipped", "reason": "duplicate_task"}
 
         user_id = str(model["uploaded_by"])
         s3_raw_key = model["s3_raw_key"]
@@ -547,6 +546,7 @@ def process_model(self: Task, model_id: str) -> dict:
 
             except SoftTimeLimitExceeded:
                 logger.error("[IFC] Soft time limit exceeded at stage=%s", stage)
+                release_task_lock(model_id, "app.tasks.ifc.process_model")
                 return handle_task_failure(
                     engine, model_id, user_id, stage, SoftTimeLimitExceeded("soft time limit")
                 )
@@ -554,9 +554,9 @@ def process_model(self: Task, model_id: str) -> dict:
             except Exception as exc:
                 logger.exception("[IFC] Failed at stage=%s for model_id=%s", stage, model_id)
                 result = handle_task_failure(engine, model_id, user_id, stage, exc)
+                release_task_lock(model_id, "app.tasks.ifc.process_model")
                 if is_retryable(exc):
                     raise self.retry(exc=exc)
-                release_task_lock(model_id, "app.tasks.ifc.process_model")
                 return result
     finally:
         ACTIVE_TASKS.labels(task_name="ifc.process_model").dec()
