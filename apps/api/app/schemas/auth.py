@@ -117,6 +117,18 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AuthResponse(BaseModel):
+    """
+    Per PRD 5.3: register/login/refresh return access_token + refresh_token
+    in the body (in addition to the httpOnly cookies set for browser
+    clients, which remain the primary mechanism for the web app).
+    """
+    user: UserResponse
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str

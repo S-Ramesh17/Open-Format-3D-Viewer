@@ -105,12 +105,14 @@ if _PROMETHEUS_AVAILABLE:
         excluded_handlers=["/health", "/metrics"],
     ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
     
-# Order matters — outermost first.
-# AuthMiddleware must run AFTER RateLimitMiddleware so rate-limit headers
-# are present even on 401 responses, and AFTER RequestIDMiddleware so
-# request_id is available for the 401 error body.
-app.add_middleware(RateLimitMiddleware)
+# Order matters — Starlette wraps in LIFO order: the LAST middleware
+# added via add_middleware() becomes the OUTERMOST layer and therefore
+# runs FIRST on every request. To make RateLimitMiddleware wrap (and run
+# before) AuthMiddleware — so failed/blocked auth attempts are still
+# counted against the per-IP rate limit — Auth must be added first and
+# RateLimit added after it.
 app.add_middleware(AuthMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(ProxyHeadersMiddleware)

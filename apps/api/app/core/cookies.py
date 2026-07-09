@@ -25,13 +25,16 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
     access_max_age = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     refresh_max_age = int(timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS).total_seconds())
 
+    secure = _is_secure()
+    samesite = "none" if secure else "lax"
+
     response.set_cookie(
         key=ACCESS_TOKEN_COOKIE,
         value=access_token,
         max_age=access_max_age,
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=secure,
+        samesite=samesite,
         path="/",
     )
     response.set_cookie(
@@ -39,8 +42,8 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
         value=refresh_token,
         max_age=refresh_max_age,
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=secure,
+        samesite=samesite,
         path="/v1/auth",
     )
 
@@ -51,17 +54,20 @@ def clear_auth_cookies(response: Response) -> None:
     Must mirror the same secure/samesite/path attributes used when setting,
     otherwise browsers ignore the deletion.
     """
+    secure = _is_secure()
+    samesite = "none" if secure else "lax"
+
     response.delete_cookie(
         key=ACCESS_TOKEN_COOKIE,
         path="/",
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=secure,
+        samesite=samesite,
     )
     response.delete_cookie(
         key=REFRESH_TOKEN_COOKIE,
         path="/v1/auth",
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=secure,
+        samesite=samesite,
     )

@@ -4,7 +4,23 @@ from app.config import settings
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.db.base import Base
-from app.models import Annotation as Annotation, AnnotationComment as AnnotationComment, ApiKey as ApiKey, Model as Model, ModelElement as ModelElement, ModelMetadata as ModelMetadata, Project as Project, ProjectMember as ProjectMember, User as User, Webhook as Webhook
+# Import every mapped model via __all__ so a model added to app/models/
+# but forgotten in __all__ can never silently vanish from autogenerate
+# (this is how ShareLink was missed previously).
+import app.models as _models  # noqa: F401
+
+# Tables that exist in the database (via a hand-written migration) but are
+# intentionally NOT mapped as an ORM model — e.g. purely write-only audit /
+# log tables. Autogenerate must ignore these or it will propose dropping
+# them on every `alembic revision --autogenerate` run.
+_UNMAPPED_TABLES = {"webhook_delivery_logs"}
+
+
+def include_object(object, name, type_, reflected, compare_to):
+    if type_ == "table" and name in _UNMAPPED_TABLES:
+        return False
+    return True
+
 
 config = context.config
 config.set_main_option(
@@ -26,6 +42,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -48,6 +65,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            include_object=include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

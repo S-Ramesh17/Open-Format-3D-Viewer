@@ -61,18 +61,17 @@ async def validate_api_key(raw_key: str, db: AsyncSession) -> User | None:
 
     incoming_hash = _hash_key(raw_key)
 
-    # Fetch all non-revoked keys and use compare_digest
-    # In production with millions of keys, add a partial index on key_hash
+    # Indexed lookup on key_hash (unique + indexed column) instead of a
+    # full-table scan. key_hash is a SHA-256 digest of a 256-bit random
+    # secret, so an equality lookup on the digest does not reintroduce a
+    # timing side-channel on the underlying key material.
     result = await db.execute(
-        select(ApiKey).where(ApiKey.revoked_at.is_(None))
+        select(ApiKey).where(
+            ApiKey.key_hash == incoming_hash,
+            ApiKey.revoked_at.is_(None),
+        )
     )
-    api_keys = result.scalars().all()
-
-    matched_key: ApiKey | None = None
-    for key in api_keys:
-        if secrets.compare_digest(key.key_hash, incoming_hash):
-            matched_key = key
-            break
+    matched_key = result.scalar_one_or_none()
 
     if not matched_key:
         return None

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings
 
 
@@ -14,8 +16,16 @@ class WorkerSettings(BaseSettings):
     STORAGE_PROVIDER: str = "s3"  # "s3" | "local"
     LOCAL_STORAGE_PATH: str = "/tmp/openformat_uploads"
     # END TEMP LOCAL STORAGE
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
     SENTRY_DSN: str = ""
+
+    # Upload limits (mirrors apps/api/app/config.py::MAX_UPLOAD_SIZE_BYTES —
+    # kept as a separate setting since worker and api are deployed/scaled
+    # independently, but should be set to the same value operationally)
+    MAX_UPLOAD_SIZE_BYTES: int = 500 * 1024 * 1024  # 500MB
+
+    # Prometheus /metrics HTTP server port (multiprocess-aggregated)
+    WORKER_METRICS_PORT: int = 9090
 
     # XKT conversion: path to @xeokit/xeokit-convert CLI or node script
     XEOKIT_CONVERT_BIN: str = "xeokit-convert"

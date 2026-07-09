@@ -10,17 +10,7 @@ from app.core.request_id import get_request_id
 from app.db.engine import get_db
 from app.models.user import User
 from app.schemas.models import ModelUploadRequest, ModelUploadResponse
-from app.services.models import (
-    confirm_upload,
-    delete_model,
-    get_chunks,
-    get_element_by_guid,
-    get_model,
-    get_tree,
-    initiate_upload,
-    list_elements,
-    list_models,
-)
+import app.services.models
 
 router = APIRouter(prefix="/v1/models", tags=["models"])
 
@@ -103,7 +93,7 @@ async def list_all(
 
     await get_project_member(project_id, current_user, db)
 
-    items, next_cursor = await list_models(project_id, db, limit=limit, cursor=cursor)
+    items, next_cursor = await app.services.models.list_models(project_id, db, limit=limit, cursor=cursor)
 
     return JSONResponse(
         status_code=200,
@@ -120,12 +110,12 @@ async def upload(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    # Verify project membership (editor+ required to upload)
-    from app.core.authorization import get_project_member
+    # Verify project membership AND editor+ role (viewers cannot upload)
+    from app.core.authorization import require_role_for_project
 
-    await get_project_member(data.project_id, current_user, db)
+    await require_role_for_project(data.project_id, "editor", current_user, db)
 
-    model_id, upload_result, storage_key = await initiate_upload(data, current_user.id, db)
+    model_id, upload_result, storage_key = await app.services.models.initiate_upload(data, current_user.id, db)
 
     # generate_presigned_upload_url returns a dict {"url": str, "fields": dict}
     # in both local and S3 modes. Unpack it here so the response is always flat.
@@ -151,13 +141,13 @@ async def confirm(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    model = await get_model(model_id, db)
-    from app.core.authorization import get_project_member
+    from app.core.authorization import require_role_for_project
 
-    await get_project_member(model.project_id, current_user, db)
+    model = await app.services.models.get_model(model_id, db)
+    await require_role_for_project(model.project_id, "editor", current_user, db)
 
-    result = await confirm_upload(model_id, db)
-    return envelope(result.model_dump(mode="json"))
+    response = await app.services.models.confirm_upload(model_id, db)
+    return envelope(response.model_dump(mode="json"))
 
 
 @router.get("/{model_id}")
@@ -166,7 +156,7 @@ async def get_one(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    model = await get_model(model_id, db)
+    model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
     await get_project_member(model.project_id, current_user, db)
@@ -180,7 +170,7 @@ async def delete_one(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    model = await get_model(model_id, db)
+    model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member, ROLE_HIERARCHY
     from app.core.exceptions import AuthorizationException
 
@@ -188,7 +178,7 @@ async def delete_one(
     if ROLE_HIERARCHY.get(member.role, -1) < ROLE_HIERARCHY.get("admin", 0):
         raise AuthorizationException("This action requires 'admin' role.")
 
-    await delete_model(model_id, db)
+    await app.services.models.delete_model(model_id, db)
 
 
 @router.get("/{model_id}/elements")
@@ -201,12 +191,12 @@ async def elements(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    model = await get_model(model_id, db)
+    model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
     await get_project_member(model.project_id, current_user, db)
 
-    items, next_cursor = await list_elements(
+    items, next_cursor = await app.services.models.list_elements(
         model_id, db, limit=limit, cursor=cursor, ifc_type=ifc_type, search=search
     )
 
@@ -226,12 +216,12 @@ async def element_by_guid(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    model = await get_model(model_id, db)
+    model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
     await get_project_member(model.project_id, current_user, db)
 
-    element = await get_element_by_guid(model_id, guid, db)
+    element = await app.services.models.get_element_by_guid(model_id, guid, db)
     return envelope(element.model_dump(mode="json"))
 
 
@@ -241,12 +231,12 @@ async def tree(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    model = await get_model(model_id, db)
+    model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
     await get_project_member(model.project_id, current_user, db)
 
-    tree_data = await get_tree(model_id, db)
+    tree_data = await app.services.models.get_tree(model_id, db)
     return envelope({"model_id": str(model_id), "tree": tree_data})
 
 
@@ -256,10 +246,10 @@ async def chunks(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    model = await get_model(model_id, db)
+    model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
     await get_project_member(model.project_id, current_user, db)
 
-    chunk_list = await get_chunks(model_id, db)
+    chunk_list = await app.services.models.get_chunks(model_id, db)
     return envelope({"model_id": str(model_id), "chunks": chunk_list})

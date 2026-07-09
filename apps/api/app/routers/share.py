@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import envelope
-from app.core.authorization import get_project_member
+from app.core.authorization import get_project_member, require_role_for_project
 from app.core.dependencies import get_current_user
 from app.db.engine import get_db
 from app.models.model import Model
@@ -38,7 +38,7 @@ async def create_share_link(
     if not model:
         from app.core.exceptions import NotFoundException
         raise NotFoundException("Model not found")
-    await get_project_member(model.project_id, current_user, db)
+    await require_role_for_project(model.project_id, "editor", current_user, db)
 
     link = await share_svc.create_share_link(
         model_id=body.model_id,

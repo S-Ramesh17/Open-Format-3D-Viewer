@@ -21,18 +21,18 @@ EXCLUDED_SUFFIX_PATTERNS = (
 )
 
 
-def _is_excluded(path: str) -> bool:
+def _is_excluded(path: str, method: str) -> bool:
     if not path.startswith("/v1/"):
         return True  # non-v1 routes (e.g. /health) untouched by this middleware
 
     if any(path.startswith(p) for p in EXCLUDED_PREFIXES):
         return True
-    
+
     import re as _re
     if _re.match(r'^/v1/share/[^/]+$', path) and path != '/v1/share':
-        # Only GET is public; POST/DELETE still require auth (handled by FastAPI deps)
-        return True
-    
+        # Only GET is public; POST/DELETE (revoke, etc.) still require auth.
+        return method == "GET"
+
     if any(path.endswith(s) for s in EXCLUDED_SUFFIX_PATTERNS):
         return True
 
@@ -52,7 +52,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if _is_excluded(path):
+        if _is_excluded(path, request.method):
             return await call_next(request)
 
         token = None

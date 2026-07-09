@@ -1,12 +1,41 @@
 # apps/api/app/config.py
+from typing import Literal
+
 from pydantic_settings import BaseSettings
 from pydantic import computed_field, field_validator
+
+# Placeholder values that must never be used as a real secret. Checked
+# case-insensitively so ".env.example" style values are always rejected.
+_PLACEHOLDER_SECRET_KEYS = {
+    "changeme",
+    "change_me_to_a_random_64_char_hex_string",
+    "secret",
+    "changethis",
+    "your-secret-key-here",
+    "dev-secret-change-in-prod",
+}
 
 
 class Settings(BaseSettings):
     DATABASE_URL: str
     SECRET_KEY: str
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError(
+                f"SECRET_KEY must be at least 32 characters long, got {len(v)}. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        normalised = v.strip().lower().replace("-", "_")
+        if normalised in _PLACEHOLDER_SECRET_KEYS:
+            raise ValueError(
+                "SECRET_KEY is a known placeholder value. Generate a real secret with: "
+                "python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        return v
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod

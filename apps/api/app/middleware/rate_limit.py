@@ -10,11 +10,15 @@ from app.core.redis import get_redis
 from app.core.exceptions import AppException
 from app.core.error_handlers import _error_response
 
-# Routes that do not require auth — skip rate limiting
+# Routes that do not require auth — skip rate limiting entirely.
+# NOTE: /v1/auth/login and /v1/auth/register are intentionally NOT exempt —
+# they are unauthenticated by definition, which previously meant they had
+# no rate limiting at all (no user_id to key on, and they were skipped
+# before _identify_request ever ran), allowing unlimited credential
+# brute-forcing. They're now rate-limited by IP via AUTH_BRUTE_FORCE_PATHS
+# below, with a much tighter ceiling than normal API traffic.
 EXEMPT_PATHS = {
     "/health",
-    "/v1/auth/register",
-    "/v1/auth/login",
     "/v1/auth/refresh",
     "/v1/auth/google",
     "/v1/auth/google/callback",
@@ -22,6 +26,15 @@ EXEMPT_PATHS = {
     "/openapi.json",
     "/redoc",
 }
+
+# Endpoints that accept credentials pre-auth — always keyed by IP
+# (there is no valid user/session yet), with a low ceiling to slow
+# brute-force / credential-stuffing attempts regardless of plan.
+AUTH_BRUTE_FORCE_PATHS = {
+    "/v1/auth/login",
+    "/v1/auth/register",
+}
+RATE_LIMIT_AUTH_PER_HOUR = 10
 
 PLAN_LIMITS = {
     "free": settings.RATE_LIMIT_FREE_PER_HOUR,
@@ -55,6 +68,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if request.url.path in EXEMPT_PATHS:
                 return await call_next(request)
 
+            # Credential endpoints — always IP-keyed, tight ceiling,
+            # independent of plan (there's no authenticated identity yet).
+            if request.url.path in AUTH_BRUTE_FORCE_PATHS:
+                client_ip = request.client.host if request.client else "unknown"
+                return await self._enforce_limit(
+                    request,
+                    call_next,
+                    identifier=f"authip:{client_ip}",
+                    limit=RATE_LIMIT_AUTH_PER_HOUR,
+                )
+
             # Extract user identity and plan
             user_id, plan = await self._identify_request(request)
             limit = PLAN_LIMITS.get(plan, settings.RATE_LIMIT_FREE_PER_HOUR)
@@ -67,40 +91,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 response.headers["X-RateLimit-Reset"] = "0"
                 return response
 
-            hour_bucket = _get_hour_bucket()
-            redis_key = _rate_limit_key(user_id, hour_bucket)
-            reset_time = hour_bucket + 3600
-
-            redis = await get_redis()
-
-            # Atomic increment
-            count = await redis.incr(redis_key)
-
-            # Set TTL on first request of this window
-            if count == 1:
-                await redis.expire(redis_key, 3600)
-
-            remaining = max(0, limit - count)
-
-            # Reject if over limit
-            if count > limit:
-                raise RateLimitException(
-                    message=f"Rate limit exceeded. Limit: {limit}/hour.",
-                    details={
-                        "limit": limit,
-                        "remaining": 0,
-                        "reset": reset_time,
-                    },
-                )
-
-            response = await call_next(request)
-
-            # Add rate limit headers
-            response.headers["X-RateLimit-Limit"] = str(limit)
-            response.headers["X-RateLimit-Remaining"] = str(remaining)
-            response.headers["X-RateLimit-Reset"] = str(reset_time)
-
-            return response
+            return await self._enforce_limit(
+                request, call_next, identifier=user_id, limit=limit
+            )
 
         except AppException as exc:
             return _error_response(
@@ -109,6 +102,44 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 message=exc.message,
                 details=exc.details,
             )
+
+    async def _enforce_limit(
+        self, request: Request, call_next, *, identifier: str, limit: int
+    ) -> Response:
+        hour_bucket = _get_hour_bucket()
+        redis_key = _rate_limit_key(identifier, hour_bucket)
+        reset_time = hour_bucket + 3600
+
+        redis = await get_redis()
+
+        # Atomic increment
+        count = await redis.incr(redis_key)
+
+        # Set TTL on first request of this window
+        if count == 1:
+            await redis.expire(redis_key, 3600)
+
+        remaining = max(0, limit - count)
+
+        # Reject if over limit
+        if count > limit:
+            raise RateLimitException(
+                message=f"Rate limit exceeded. Limit: {limit}/hour.",
+                details={
+                    "limit": limit,
+                    "remaining": 0,
+                    "reset": reset_time,
+                },
+            )
+
+        response = await call_next(request)
+
+        # Add rate limit headers
+        response.headers["X-RateLimit-Limit"] = str(limit)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Reset"] = str(reset_time)
+
+        return response
 
     async def _identify_request(self, request: Request) -> tuple[str, str]:
         """

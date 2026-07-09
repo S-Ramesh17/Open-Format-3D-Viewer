@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import envelope
-from app.core.authorization import get_project_member
+from app.core.authorization import get_project_member, require_role_for_project
 from app.core.dependencies import get_current_user
 from app.core.request_id import get_request_id
 from app.db.engine import get_db
@@ -56,7 +56,7 @@ async def create_for_model(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     model = await get_model(model_id, db)
-    await get_project_member(model.project_id, current_user, db)
+    await require_role_for_project(model.project_id, "editor", current_user, db)
 
     result = await create_annotation(model_id, data, current_user.id, db)
     return envelope(result.model_dump(mode="json"), status_code=201)
@@ -71,7 +71,7 @@ async def update_one(
 ) -> JSONResponse:
     annotation = await get_annotation(annotation_id, db)
     model = await get_model(annotation.model_id, db)
-    await get_project_member(model.project_id, current_user, db)
+    await require_role_for_project(model.project_id, "editor", current_user, db)
 
     result = await update_annotation(annotation_id, data, db)
     return envelope(result.model_dump(mode="json"))
@@ -86,7 +86,7 @@ async def add_comment(
 ) -> JSONResponse:
     annotation = await get_annotation(annotation_id, db)
     model = await get_model(annotation.model_id, db)
-    await get_project_member(model.project_id, current_user, db)
+    await require_role_for_project(model.project_id, "editor", current_user, db)
 
     result = await create_comment(annotation_id, data, current_user.id, db)
     return envelope(result.model_dump(mode="json"), status_code=201)

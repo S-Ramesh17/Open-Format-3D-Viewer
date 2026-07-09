@@ -8,17 +8,18 @@ Call start_metrics_server() once from celery_app.py after worker init.
 The server is intentionally NOT the API /metrics endpoint — Prometheus
 scrapes both API (:8000/metrics) and worker (:9090/metrics) separately.
 """
-
-import logging
 import os
+import logging
 import threading
 from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, REGISTRY, CollectorRegistry, multiprocess
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
-_METRICS_PORT = int(os.environ.get("WORKER_METRICS_PORT", "9090"))
+_METRICS_PORT = settings.WORKER_METRICS_PORT
 
 
 class _SilentHandler(WSGIRequestHandler):

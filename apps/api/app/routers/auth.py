@@ -18,8 +18,11 @@ from app.models.user import User
 from app.schemas.auth import (
     ApiKeyCreatedResponse,
     ApiKeyResponse,
+    AuthResponse,
     CreateApiKeyRequest,
     LoginRequest,
+    LogoutRequest,
+    RefreshRequest,
     RegisterRequest,
     UserResponse,
 )
@@ -42,8 +45,12 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     tokens, user = await register_user(data, db)
-    user_response = UserResponse.model_validate(user)
-    envelope_response = envelope_model(user_response, status_code=201)
+    auth_response = AuthResponse(
+        user=UserResponse.model_validate(user),
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+    )
+    envelope_response = envelope_model(auth_response, status_code=201)
     set_auth_cookies(envelope_response, tokens.access_token, tokens.refresh_token)
     return envelope_response
 
@@ -54,8 +61,12 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     tokens, user = await login_user(data, db)
-    user_response = UserResponse.model_validate(user)
-    envelope_response = envelope_model(user_response)
+    auth_response = AuthResponse(
+        user=UserResponse.model_validate(user),
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+    )
+    envelope_response = envelope_model(auth_response)
     set_auth_cookies(envelope_response, tokens.access_token, tokens.refresh_token)
     return envelope_response
 
@@ -63,22 +74,34 @@ async def login(
 @router.post("/refresh")
 async def refresh(
     request: Request,
+    data: RefreshRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
+    # PRD 5.3 specifies a body {refresh_token} for API clients; browser
+    # clients rely on the httpOnly cookie instead. Prefer the body when
+    # present, fall back to the cookie.
+    refresh_token = (data.refresh_token if data else None) or request.cookies.get(
+        REFRESH_TOKEN_COOKIE
+    )
     if not refresh_token:
         raise AuthenticationException("Refresh token missing")
 
     tokens, user = await refresh_access_token(refresh_token, db)
-    user_response = UserResponse.model_validate(user)
-    envelope_response = envelope_model(user_response)
+    auth_response = AuthResponse(
+        user=UserResponse.model_validate(user),
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+    )
+    envelope_response = envelope_model(auth_response)
     set_auth_cookies(envelope_response, tokens.access_token, tokens.refresh_token)
     return envelope_response
 
 
 @router.post("/logout", status_code=204)
-async def logout(request: Request) -> Response:
-    refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
+async def logout(request: Request, data: LogoutRequest | None = None) -> Response:
+    refresh_token = (data.refresh_token if data else None) or request.cookies.get(
+        REFRESH_TOKEN_COOKIE
+    )
     if refresh_token:
         await logout_user(refresh_token)
 

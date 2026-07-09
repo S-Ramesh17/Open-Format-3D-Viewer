@@ -50,4 +50,5 @@ class Model(Base):
     __table_args__ = (
         Index("ix_models_project_id", "project_id"),
         Index("ix_models_status", "status"),
+        Index("ix_models_uploaded_by", "uploaded_by"),
     )

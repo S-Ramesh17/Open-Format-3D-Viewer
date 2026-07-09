@@ -28,4 +28,5 @@ class ModelElement(Base):
     __table_args__ = (
         Index("ix_model_elements_model_id", "model_id"),
         Index("ix_model_elements_model_guid", "model_id", "guid"),
+        Index("ix_model_elements_element_type", "element_type"),
     )

@@ -20,6 +20,7 @@ from typing import Any
 
 import botocore.exceptions  # type: ignore
 
+from app.config import settings
 from app.tasks.common import publish_model_failed, update_model_status
 
 logger = logging.getLogger(__name__)
@@ -151,7 +152,7 @@ def handle_task_failure(
 # File size guard — call before any processing
 # ---------------------------------------------------------------------------
 
-MAX_FILE_BYTES = 500 * 1024 * 1024  # 500 MB
+MAX_FILE_BYTES = settings.MAX_UPLOAD_SIZE_BYTES
 
 
 def assert_file_size(file_path: str, max_bytes: int = MAX_FILE_BYTES) -> None:

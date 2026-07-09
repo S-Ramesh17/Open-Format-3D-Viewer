@@ -81,6 +81,17 @@ async def handle_google_callback(
         if user:
             user.provider = "google"
             user.provider_user_id = google_sub
+            # Invalidate the existing password on merge: once an account is
+            # linked to Google, it must only be reachable via Google-verified
+            # login. Leaving the old password_hash active would let anyone
+            # who knows/guesses the original password bypass Google's
+            # identity verification entirely.
+            if user.password_hash is not None:
+                logger.info(
+                    "Invalidating existing password for user %s on Google account link",
+                    user.id,
+                )
+                user.password_hash = None
             await db.commit()
             await db.refresh(user)
         else:

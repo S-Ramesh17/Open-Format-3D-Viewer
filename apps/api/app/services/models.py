@@ -29,7 +29,6 @@ from app.services.storage import (
 )
 
 from app.core.redis import publish_model_event
-from app.services.webhooks import dispatch_event
 
 EXT_TO_FORMAT = {
     ".ifc": "ifc",

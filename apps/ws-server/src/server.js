@@ -31,7 +31,12 @@ import {
 // Config
 // ---------------------------------------------------------------------------
 const PORT = parseInt(process.env.PORT || '8001', 10);
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-prod';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  // eslint-disable-next-line no-console
+  console.error('FATAL: JWT_SECRET environment variable is not set. Refusing to start with an insecure default.');
+  process.exit(1);
+}
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379/0';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
