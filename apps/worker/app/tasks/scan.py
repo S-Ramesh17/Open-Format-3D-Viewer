@@ -212,6 +212,8 @@ def _dispatch_processing_task(model_id: str, file_format: str | None) -> None:
     bind=True,
     max_retries=3,
     default_retry_delay=30,
+    time_limit=900,
+    soft_time_limit=600,
     acks_late=True,
     reject_on_worker_lost=True,
     queue="scan",
@@ -307,8 +309,12 @@ def scan_file(self, model_id: str, s3_key: str) -> dict:
 
     except Exception as exc:
         logger.exception("[SCAN] Unexpected error scanning model_id=%s: %s", model_id, exc)
-        # Non-retryable — do not fail the model; log and move on
-        # (scan infrastructure failure should not block legitimate uploads)
+        update_model_status(
+            engine,
+            model_id,
+            "failed",
+            error_message=f"Antivirus scan failed unexpectedly: {str(exc)[:200]}"
+        )
         return {
             "model_id": model_id,
             "s3_key": s3_key,

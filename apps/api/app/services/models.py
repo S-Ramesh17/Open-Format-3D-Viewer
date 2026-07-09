@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundException, UnsupportedFormatException, ValidationException
 from app.models.model import Model
+from app.models.user import User
 from app.models.model_element import ModelElement
 from app.models.model_metadata import ModelMetadata
 from app.schemas.models import (
@@ -92,14 +93,40 @@ async def list_models(
     return models, next_cursor
 
 
+PLAN_DAILY_UPLOAD_LIMITS = {
+    "free": 5,
+    "pro": 100,
+    "enterprise": float("inf")
+}
+
 async def initiate_upload(
     data: ModelUploadRequest,
-    user_id: uuid.UUID,
+    user: User,
     db: AsyncSession,
 ) -> tuple[uuid.UUID, str, str]:
     safe_filename = validate_filename(data.filename)
-    validate_file_size(data.size_bytes)
+    validate_file_size(data.size_bytes, user.plan)
     validate_mime_type_declared(data.content_type)
+    
+    limit = PLAN_DAILY_UPLOAD_LIMITS.get(user.plan, PLAN_DAILY_UPLOAD_LIMITS["free"])
+    if limit < float("inf"):
+        import redis
+        from app.config import settings
+        r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        redis_key = f"uploads:{user.id}:{today}"
+        try:
+            count = int(r.get(redis_key) or 0)
+            if count >= limit:
+                r.close()
+                raise ValidationException(f"Daily upload limit of {limit} reached for {user.plan} plan.")
+            r.incr(redis_key)
+            if count == 0:
+                r.expire(redis_key, 86400 * 2)
+        except redis.RedisError:
+            pass
+        finally:
+            r.close()
 
     ext = "." + safe_filename.rsplit(".", 1)[-1].lower()
     file_format = EXT_TO_FORMAT.get(ext)
@@ -107,12 +134,12 @@ async def initiate_upload(
         raise UnsupportedFormatException(f"Unsupported file format: {ext}")
 
     model_id = uuid.uuid4()
-    storage_key = build_storage_key(user_id, model_id, safe_filename)
+    storage_key = build_storage_key(user.id, model_id, safe_filename)
 
     model = Model(
         id=model_id,
         project_id=data.project_id,
-        uploaded_by=user_id,
+        uploaded_by=user.id,
         original_filename=safe_filename,
         name=data.name or safe_filename,
         file_format=file_format,

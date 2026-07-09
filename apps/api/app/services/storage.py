@@ -94,12 +94,19 @@ def validate_filename(filename: str) -> str:
     return safe_name
 
 
-def validate_file_size(size_bytes: int) -> None:
+PLAN_MAX_UPLOAD_BYTES = {
+    "free": 50 * 1024 * 1024,
+    "pro": 500 * 1024 * 1024,
+    "enterprise": 5 * 1024 * 1024 * 1024,
+}
+
+def validate_file_size(size_bytes: int, plan: str = "free") -> None:
     if size_bytes <= 0:
         raise ValidationException("File size must be greater than 0")
-    if size_bytes > settings.MAX_UPLOAD_SIZE_BYTES:
-        max_mb = settings.MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)
-        raise FileTooLargeException(f"File exceeds maximum size of {max_mb}MB")
+    max_bytes = PLAN_MAX_UPLOAD_BYTES.get(plan, PLAN_MAX_UPLOAD_BYTES["free"])
+    if size_bytes > max_bytes:
+        max_mb = max_bytes // (1024 * 1024)
+        raise FileTooLargeException(f"File exceeds the {plan} plan limit of {max_mb}MB")
 
 
 def validate_mime_type_declared(content_type: str) -> None:

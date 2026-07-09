@@ -48,9 +48,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.queue_collector.collect_queue_depths",
         "schedule": 30.0,  # every 30 seconds
     },
+    "cleanup-abandoned-uploads": {
+        "task": "app.tasks.common.cleanup_abandoned_uploads",
+        "schedule": 3600.0,  # every 1 hour
+    }
 }
 
 import app.tasks.queue_collector  # noqa: E402, F401  — register beat task
+import app.tasks.common        # noqa: E402, F401
 # Explicit imports so autodiscover works even if PYTHONPATH is minimal
 import app.tasks.ifc           # noqa: E402, F401
 import app.tasks.mesh          # noqa: E402, F401

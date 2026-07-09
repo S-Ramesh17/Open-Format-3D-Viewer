@@ -115,7 +115,7 @@ async def upload(
 
     await require_role_for_project(data.project_id, "editor", current_user, db)
 
-    model_id, upload_result, storage_key = await app.services.models.initiate_upload(data, current_user.id, db)
+    model_id, upload_result, storage_key = await app.services.models.initiate_upload(data, current_user, db)
 
     # generate_presigned_upload_url returns a dict {"url": str, "fields": dict}
     # in both local and S3 modes. Unpack it here so the response is always flat.
