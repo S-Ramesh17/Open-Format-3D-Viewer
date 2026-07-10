@@ -63,3 +63,18 @@ class WebhookResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+class WebhookCreateResponse(WebhookResponse):
+    secret: str
+
+class WebhookDeliveryLogResponse(BaseModel):
+    id: uuid.UUID
+    webhook_id: uuid.UUID
+    delivery_id: str
+    event: str
+    status_code: int | None
+    success: bool
+    error: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

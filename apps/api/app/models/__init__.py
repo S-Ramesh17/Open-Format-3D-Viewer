@@ -8,6 +8,7 @@ from app.models.annotation import Annotation
 from app.models.annotation_comment import AnnotationComment
 from app.models.api_key import ApiKey
 from app.models.webhook import Webhook
+from app.models.webhook_delivery_log import WebhookDeliveryLog
 from app.models.share_link import ShareLink
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "AnnotationComment",
     "ApiKey",
     "Webhook",
+    "WebhookDeliveryLog",
     "ShareLink",
 ]

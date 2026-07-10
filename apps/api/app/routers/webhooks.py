@@ -1,9 +1,8 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.api.responses import envelope
 from app.core.authorization import get_project_member
 from app.core.dependencies import get_current_user
@@ -12,10 +11,12 @@ from app.models.user import User
 from app.schemas.webhooks import WebhookCreate, WebhookUpdate
 from app.services.bcf_export import export_bcf
 from app.services.models import get_model
+from app.core.request_id import get_request_id
 from app.services.webhooks import (
     create_webhook,
     delete_webhook,
     list_webhooks,
+    list_webhook_deliveries,
     update_webhook,
 )
 
@@ -59,6 +60,25 @@ async def delete_one(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     await delete_webhook(webhook_id, current_user, db)
+
+
+@router.get("/webhooks/{webhook_id}/deliveries")
+async def get_deliveries(
+    webhook_id: uuid.UUID,
+    cursor: str | None = Query(default=None, description="Pagination cursor"),
+    limit: int = Query(default=20, ge=1, le=100, description="Results per page"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items, next_cursor = await list_webhook_deliveries(webhook_id, current_user, db, limit=limit, cursor=cursor)
+    
+    return JSONResponse(
+        status_code=200,
+        content={
+            "data": [i.model_dump(mode="json") for i in items],
+            "meta": {"request_id": get_request_id(), "next_cursor": next_cursor},
+        },
+    )
 
 
 @router.get("/models/{model_id}/export/bcf")
