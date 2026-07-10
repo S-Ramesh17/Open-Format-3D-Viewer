@@ -51,7 +51,7 @@ jobs:
       - name: Run Worker Tests
         env:
           REDIS_URL: redis://localhost:6379/0
-          ENVIRONMENT: testing
+          ENVIRONMENT: development
         run: |
           cd apps/worker
           poetry run pytest
