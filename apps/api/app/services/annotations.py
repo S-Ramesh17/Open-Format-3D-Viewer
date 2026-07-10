@@ -48,7 +48,7 @@ async def create_annotation(
         created_by=user_id,
         title=sanitize_text(data.title),
         body=sanitize_text(data.body) if data.body else None,
-        position=data.position,
+        position=data.position.model_dump(),
         status="open",
     )
     db.add(annotation)

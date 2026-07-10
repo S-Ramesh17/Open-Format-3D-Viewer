@@ -24,7 +24,7 @@ class Annotation(Base):
     body: Mapped[str | None] = mapped_column(Text)
     position: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(
-        Enum("open", "resolved", name="annotation_status_enum"),
+        Enum("open", "in_review", "resolved", name="annotation_status_enum"),
         default="open",
         nullable=False,
     )

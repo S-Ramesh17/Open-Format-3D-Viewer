@@ -4,10 +4,22 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
+from pydantic import BaseModel, Field, field_validator
+
+
+class AnnotationPosition(BaseModel):
+    x: float
+    y: float
+    z: float
+    normal_x: float
+    normal_y: float
+    normal_z: float
+
+
 class AnnotationCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     body: str | None = Field(default=None, max_length=5000)
-    position: dict = Field(..., description="3D position: x, y, z, normal_x/y/z")
+    position: AnnotationPosition = Field(..., description="3D position: x, y, z, normal_x/y/z")
 
     @field_validator("title")
     @classmethod
@@ -26,8 +38,8 @@ class AnnotationUpdate(BaseModel):
     @field_validator("status")
     @classmethod
     def status_valid(cls, v: str | None) -> str | None:
-        if v is not None and v not in ("open", "resolved"):
-            raise ValueError("status must be 'open' or 'resolved'")
+        if v is not None and v not in ("open", "in_review", "resolved"):
+            raise ValueError("status must be 'open', 'in_review', or 'resolved'")
         return v
 
 
@@ -37,11 +49,10 @@ class AnnotationResponse(BaseModel):
     created_by: uuid.UUID
     title: str
     body: str | None
-    position: dict | None
+    position: AnnotationPosition | None
     status: str
     created_at: datetime
     updated_at: datetime
-
     model_config = {"from_attributes": True}
 
 
