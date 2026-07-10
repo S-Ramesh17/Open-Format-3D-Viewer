@@ -1,90 +1,79 @@
-# ─── Python ────────────────────────────────────────────────────────────────
-**/__pycache__/
-**/*.py[cod]
-**/*.pyo
-**/*.pyd
-**/.Python
-**/*.egg
-**/*.egg-info/
-**/.eggs/
-**/dist/
-**/build/
-**/.venv/
-**/.env
+# Complete file content
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# .env.example files MUST be committed (they are documentation, not secrets)
-# The line above excludes .env (real secrets); .env.example is committed.
+# Virtual Environments
+venv/
+.venv/
+env/
+.env
+.env.local
+.env.*.local
+! .env.example
+! .env.production.example
 
-# ─── Poetry ────────────────────────────────────────────────────────────────
-# poetry.lock is intentionally committed — it ensures reproducible installs.
-# Do NOT add poetry.lock here.
+# Testing and Coverage
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+htmlcov/
 
-# ─── Node ──────────────────────────────────────────────────────────────────
-**/node_modules/
-**/.npm/
-**/npm-debug.log*
-**/yarn-debug.log*
-**/yarn-error.log*
+# Static Type Checking
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
 
-# ─── Testing ───────────────────────────────────────────────────────────────
-**/.pytest_cache/
-**/.coverage
-**/coverage.xml
-**/htmlcov/
-**/.mypy_cache/
-**/.ruff_cache/
+# Node & JS (WS Server)
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+.pnpm-debug.log
 
-# ─── Build artifacts ───────────────────────────────────────────────────────
-**/dist/
-**/build/
-**/*.egg-info/
-
-# ─── Uploads and generated files ───────────────────────────────────────────
-# -----------------------------------------------------------------------------
-# Local development storage
-# -----------------------------------------------------------------------------
-storage/
-storage/raw/
-storage/processed/
-storage/temp/
-
-# Uploaded models
-*.ifc
-*.ifczip
-*.step
-*.stp
-*.iges
-*.igs
-*.obj
-*.fbx
-*.glb
-*.gltf
-*.stl
-
-# Generated conversion outputs
-*.xkt
-
-# Temporary conversion files
-*.tmp
-
-# ─── Logs ──────────────────────────────────────────────────────────────────
-*.log
-**/logs/
-
-# ─── Docker ────────────────────────────────────────────────────────────────
-# docker-compose.override.yml is a local override — keep the main file committed
-docker-compose.override.yml
-
-# ─── IDEs ──────────────────────────────────────────────────────────────────
-.vscode/
+# IDEs and OS
 .idea/
-**/*.iml
-**/.DS_Store
-**/Thumbs.db
+.vscode/
 *.swp
 *.swo
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
 *~
 
-# ─── OS ────────────────────────────────────────────────────────────────────
-.DS_Store
-Desktop.ini
+# Project Specific
+apps/api/alembic/versions/*.pyc
+apps/worker/celerybeat-schedule
+apps/worker/celerybeat.pid
+apps/api/downloads/
+apps/api/uploads/
+apps/worker/data/
