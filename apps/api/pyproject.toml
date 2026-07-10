@@ -63,6 +63,7 @@ mypy              = "^1.13.0"
 asyncio_mode  = "auto"
 pythonpath    = ["."]
 testpaths     = ["tests"]
+addopts       = "--cov=app --cov-report=term-missing --cov-fail-under=80"
 
 [build-system]
 requires      = ["poetry-core>=1.9.0"]
