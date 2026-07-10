@@ -192,7 +192,7 @@ async def test_resolve_share_link_happy_path(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=share_test_data["owner"].id,
-        token="test-resolve-token-abc123",
+        token=f"test-resolve-token-{uuid.uuid4().hex}",
         revoked=False,
     )
     db_session.add(link)
@@ -201,7 +201,7 @@ async def test_resolve_share_link_happy_path(
     with patch("app.services.share.settings") as mock_settings:
         mock_settings.STORAGE_PROVIDER = "local"
         mock_settings.CDN_BASE_URL = "http://cdn.example.com"
-        resp = await client.get("/v1/share/test-resolve-token-abc123")
+        resp = await client.get(f"/v1/share/{link.token}")
 
     assert resp.status_code == 200
     body = resp.json()["data"]
@@ -224,13 +224,13 @@ async def test_resolve_revoked_share_link(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=share_test_data["owner"].id,
-        token="revoked-token-xyz789",
+        token=f"revoked-token-{uuid.uuid4().hex}",
         revoked=True,
     )
     db_session.add(link)
     await db_session.commit()
 
-    resp = await client.get("/v1/share/revoked-token-xyz789")
+    resp = await client.get(f"/v1/share/{link.token}")
     assert resp.status_code == 404
 
 
@@ -243,14 +243,14 @@ async def test_resolve_expired_share_link(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=share_test_data["owner"].id,
-        token="expired-token-abc456",
+        token=f"expired-token-{uuid.uuid4().hex}",
         revoked=False,
         expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
     )
     db_session.add(link)
     await db_session.commit()
 
-    resp = await client.get("/v1/share/expired-token-abc456")
+    resp = await client.get(f"/v1/share/{link.token}")
     assert resp.status_code == 400
 
 
@@ -273,7 +273,7 @@ async def test_revoke_share_link_happy_path(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=owner.id,
-        token="to-be-revoked-token",
+        token=f"to-be-revoked-token-{uuid.uuid4().hex}",
         revoked=False,
     )
     db_session.add(link)
@@ -286,7 +286,7 @@ async def test_revoke_share_link_happy_path(
     assert resp.status_code == 204
 
     # Confirm it is now revoked
-    resolve_resp = await client.get("/v1/share/to-be-revoked-token")
+    resolve_resp = await client.get(f"/v1/share/{link.token}")
     assert resolve_resp.status_code == 404
 
 
@@ -300,7 +300,7 @@ async def test_revoke_requires_auth(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=owner.id,
-        token="revoke-auth-test-token",
+        token=f"revoke-auth-test-token-{uuid.uuid4().hex}",
         revoked=False,
     )
     db_session.add(link)
@@ -321,7 +321,7 @@ async def test_revoke_by_non_owner_returns_403(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=owner.id,
-        token="non-owner-revoke-token",
+        token=f"non-owner-revoke-token-{uuid.uuid4().hex}",
         revoked=False,
     )
     db_session.add(link)
@@ -360,7 +360,7 @@ async def test_list_share_links_excludes_revoked(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=owner.id,
-        token="active-list-token-111",
+        token=f"active-list-token-{uuid.uuid4().hex}",
         revoked=False,
     )
     # Revoked link — should NOT appear in list
@@ -368,7 +368,7 @@ async def test_list_share_links_excludes_revoked(
         id=uuid.uuid4(),
         model_id=model.id,
         created_by=owner.id,
-        token="revoked-list-token-222",
+        token=f"revoked-list-token-{uuid.uuid4().hex}",
         revoked=True,
     )
     db_session.add_all([active, revoked])
@@ -380,8 +380,8 @@ async def test_list_share_links_excludes_revoked(
     )
     assert resp.status_code == 200
     tokens = [item["token"] for item in resp.json()["data"]]
-    assert "active-list-token-111" in tokens
-    assert "revoked-list-token-222" not in tokens
+    assert active.token in tokens
+    assert revoked.token not in tokens
 
 
 async def test_list_share_links_requires_membership(

@@ -10,7 +10,6 @@ Covers: POST /v1/models/upload/local
 """
 
 import os
-import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest

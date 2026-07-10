@@ -40,7 +40,7 @@ async def test_webhook_ownership_enforced(client: AsyncClient, unique_email: str
     # 3. Attacker tries to patch owner's webhook
     resp_patch = await client.patch(
         f"/v1/webhooks/{webhook_id}",
-        json={"url": "https://attacker.com/hook"},
+        json={"url": "https://example.org/hook"},
         headers={"Authorization": f"Bearer {token_attacker}"}
     )
     assert resp_patch.status_code == 404

@@ -28,7 +28,6 @@ from app.services.storage import (
 import io
 import zipfile
 
-import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 # ---------------------------------------------------------------------------
 # sanitize.py
