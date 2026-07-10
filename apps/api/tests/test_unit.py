@@ -149,13 +149,13 @@ class TestValidateFileSize:
         validate_file_size(1024)  # should not raise
 
     def test_exactly_at_limit_passes(self):
-        from app.config import settings
-        validate_file_size(settings.MAX_UPLOAD_SIZE_BYTES)  # should not raise
+        from app.services.storage import PLAN_MAX_UPLOAD_BYTES
+        validate_file_size(PLAN_MAX_UPLOAD_BYTES["free"])  # should not raise
 
     def test_above_limit_rejected(self):
-        from app.config import settings
+        from app.services.storage import PLAN_MAX_UPLOAD_BYTES
         with pytest.raises(ValidationException):
-            validate_file_size(settings.MAX_UPLOAD_SIZE_BYTES + 1)
+            validate_file_size(PLAN_MAX_UPLOAD_BYTES["free"] + 1)
 
 
 class TestValidateMimeDeclared:

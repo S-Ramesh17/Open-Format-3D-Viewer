@@ -55,3 +55,25 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
 def unique_email() -> str:
     """Generates a unique email per test run to avoid 409 CONFLICT collisions."""
     return f"test_{uuid.uuid4().hex[:12]}@example.com"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_rate_limits() -> AsyncGenerator[None, None]:
+    """
+    Flush rate-limiter Redis keys before every test.
+
+    httpx's ASGITransport gives every request the same synthetic client
+    host, so the IP-keyed auth brute-force limiter (10 req/hour on
+    /v1/auth/register and /v1/auth/login — see rate_limit.py) shares a
+    single bucket across the *entire* test session. Without a reset,
+    roughly the 11th test that registers a user gets 429, and every test
+    after that cascades into 401s and empty-envelope KeyErrors. This does
+    not weaken the production limiter in any way — it only clears the
+    test process's own Redis state so each test starts with a fresh quota.
+    """
+    from app.core.redis import get_redis
+
+    redis = await get_redis()
+    async for key in redis.scan_iter(match="ratelimit:*"):
+        await redis.delete(key)
+    yield

@@ -127,8 +127,7 @@ class TestModelConfirm:
              patch("app.services.models.fetch_object_header_bytes", return_value=b"\x00" * 256), \
              patch("app.services.models.validate_mime_type_from_bytes", return_value="application/octet-stream"), \
              patch("app.services.storage.trigger_clamav_scan"), \
-             patch("app.services.models.publish_model_event", new_callable=AsyncMock), \
-             patch("app.services.models.dispatch_event", new_callable=AsyncMock):
+             patch("app.services.models.publish_model_event", new_callable=AsyncMock):
 
             project_id = await _setup_user_and_project(client, unique_email)
 
@@ -166,8 +165,7 @@ class TestModelConfirm:
              patch("app.services.models.fetch_object_header_bytes", return_value=b"\x00" * 256), \
              patch("app.services.models.validate_mime_type_from_bytes", return_value="application/octet-stream"), \
              patch("app.services.storage.trigger_clamav_scan") as mock_scan, \
-             patch("app.services.models.publish_model_event", new_callable=AsyncMock), \
-             patch("app.services.models.dispatch_event", new_callable=AsyncMock):
+             patch("app.services.models.publish_model_event", new_callable=AsyncMock):
 
             project_id = await _setup_user_and_project(client, unique_email)
 

@@ -96,15 +96,21 @@ class TestRateLimitHeaders:
 # ---------------------------------------------------------------------------
 
 class TestExemptPaths:
-    async def test_auth_register_exempt_from_rate_limiting(self, client: AsyncClient):
-        """Auth endpoints must never return 429 — they are explicitly exempt."""
+    async def test_auth_register_not_blocked_under_normal_use(self, client: AsyncClient):
+        """
+        A single register call must succeed. Register/login are NOT exempt
+        from rate limiting — they're intentionally IP-keyed at a tighter
+        10/hour brute-force ceiling (see AUTH_BRUTE_FORCE_PATHS in
+        rate_limit.py) rather than being fully unlimited, which was itself
+        a prior security gap. This test only asserts that ordinary,
+        infrequent use isn't blocked.
+        """
         import uuid
         email = f"exempt_{uuid.uuid4().hex[:8]}@example.com"
         resp = await client.post(
             "/v1/auth/register",
             json={"email": email, "password": "testpass123"},
         )
-        # Should succeed regardless of rate limit
         assert resp.status_code != 429
 
     async def test_health_endpoint_exempt(self, client: AsyncClient):
@@ -112,7 +118,8 @@ class TestExemptPaths:
         # If health exists it should not be rate-limited
         assert resp.status_code != 429
 
-    async def test_login_exempt(self, client: AsyncClient, unique_email: str):
+    async def test_login_not_blocked_under_normal_use(self, client: AsyncClient, unique_email: str):
+        """Same clarification as above, for /v1/auth/login."""
         await client.post(
             "/v1/auth/register",
             json={"email": unique_email, "password": "testpass123"},
