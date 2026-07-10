@@ -114,7 +114,7 @@ def _log_delivery(
 def _validate_webhook_url(url: str) -> None:
     """
     Block SSRF attempts by rejecting:
-    - non-HTTP(S) schemes
+    - non-HTTPS schemes (downgrade protection)
     - private/loopback/link-local IP addresses (RFC 1918, RFC 3927, RFC 4193)
     - localhost hostnames
     - unresolvable hosts
@@ -123,8 +123,8 @@ def _validate_webhook_url(url: str) -> None:
     """
     parsed = urlparse(url)
 
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Webhook URL must use http or https scheme, got: {parsed.scheme!r}")
+    if parsed.scheme != "https":
+        raise ValueError(f"Webhook URL must use https scheme, got: {parsed.scheme!r}")
 
     host = parsed.hostname
     if not host:
@@ -164,48 +164,8 @@ def _validate_webhook_url(url: str) -> None:
             )
 
 # ---------------------------------------------------------------------------
-# SSRF re-check (defense in depth against DNS rebinding)
-# ---------------------------------------------------------------------------
-
-_BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
-
-
-def _is_safe_public_host(hostname: str | None) -> bool:
-    """
-    Re-resolve and re-check the webhook hostname immediately before delivery.
-    The API validates this at registration time, but DNS can change between
-    registration and delivery (DNS rebinding), so the worker — which is the
-    component that actually makes the outbound request — re-checks here.
-    """
-    if not hostname or hostname.lower() in _BLOCKED_HOSTNAMES:
-        return False
-    try:
-        addr_infos = _socket.getaddrinfo(hostname, None)
-    except _socket.gaierror:
-        return False
-    if not addr_infos:
-        return False
-    for _family, _type, _proto, _canon, sockaddr in addr_infos:
-        try:
-            ip = ipaddress.ip_address(sockaddr[0])
-        except ValueError:
-            return False
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            return False
-    return True
-
-
-# ---------------------------------------------------------------------------
 # HTTP delivery
 # ---------------------------------------------------------------------------
-
 def _deliver(
     url: str,
     secret: str,
