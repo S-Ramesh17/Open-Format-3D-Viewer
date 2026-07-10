@@ -15,12 +15,6 @@ EXCLUDED_EXACT_PREFIXES = (
     "/v1/share/",  # GET /v1/share/{token} is public; other methods still require auth below
 )
 
-# Exact-match excluded paths (supports path params via simple suffix check)
-EXCLUDED_SUFFIX_PATTERNS = (
-    "/public",  # /v1/models/{id}/public
-)
-
-
 def _is_excluded(path: str, method: str) -> bool:
     if not path.startswith("/v1/"):
         return True  # non-v1 routes (e.g. /health) untouched by this middleware
@@ -32,9 +26,6 @@ def _is_excluded(path: str, method: str) -> bool:
     if _re.match(r'^/v1/share/[^/]+$', path) and path != '/v1/share':
         # Only GET is public; POST/DELETE (revoke, etc.) still require auth.
         return method == "GET"
-
-    if any(path.endswith(s) for s in EXCLUDED_SUFFIX_PATTERNS):
-        return True
 
     return False
 

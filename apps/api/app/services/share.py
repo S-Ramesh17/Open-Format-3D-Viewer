@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundException, ValidationException
 from app.models.share_link import ShareLink
 from app.models.model import Model
-from app.schemas.models import ModelResponse
-
+from app.models.model_metadata import ModelMetadata
+from app.schemas.share import PublicModelResponse
+from app.config import settings
 
 def _generate_token() -> str:
     """Generate a 48-character URL-safe random token (288 bits of entropy)."""
@@ -46,10 +47,10 @@ async def create_share_link(
     return link
 
 
-async def get_share_link(token: str, db: AsyncSession) -> tuple[ShareLink, ModelResponse]:
+async def get_share_link(token: str, db: AsyncSession) -> tuple[ShareLink, PublicModelResponse]:
     """
     Resolve a share token. Raises NotFoundException if invalid, expired, or revoked.
-    Returns (link, model_response) for read-only access.
+    Returns (link, public_model_response) for read-only access.
     """
     result = await db.execute(
         select(ShareLink).where(ShareLink.token == token)
@@ -67,7 +68,27 @@ async def get_share_link(token: str, db: AsyncSession) -> tuple[ShareLink, Model
     if not model:
         raise NotFoundException("Model not found")
 
-    return link, ModelResponse.model_validate(model)
+    meta_result = await db.execute(select(ModelMetadata).where(ModelMetadata.model_id == model.id))
+    metadata = meta_result.scalar_one_or_none()
+    
+    chunk_urls = []
+    if metadata and metadata.properties:
+        keys = metadata.properties.get("xkt_chunks") or metadata.properties.get("processed_keys") or []
+        base_cdn = settings.CDN_BASE_URL.rstrip("/")
+        chunk_urls = [f"{base_cdn}/{k}" for k in keys]
+
+    # Convert to response dictionary to satisfy pydantic since model doesn't natively have chunk_urls
+    model_data = {
+        "id": model.id,
+        "name": model.name,
+        "file_format": model.file_format,
+        "status": model.status,
+        "created_at": model.created_at,
+        "updated_at": model.updated_at,
+        "chunk_urls": chunk_urls,
+    }
+
+    return link, PublicModelResponse.model_validate(model_data)
 
 
 async def revoke_share_link(
@@ -95,7 +116,7 @@ async def list_share_links(
 ) -> list[ShareLink]:
     result = await db.execute(
         select(ShareLink)
-        .where(ShareLink.model_id == model_id, ShareLink.revoked == False)
+        .where(ShareLink.model_id == model_id, ShareLink.revoked is False)
         .order_by(ShareLink.created_at.desc())
     )
     return list(result.scalars().all())

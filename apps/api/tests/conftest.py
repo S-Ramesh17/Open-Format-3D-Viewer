@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncGenerator
 import uuid
 
 import pytest
@@ -18,7 +19,7 @@ def event_loop():
 
 
 @pytest_asyncio.fixture
-async def db_session() -> AsyncSession:
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """
     Provides a DB session for tests that need direct DB access.
     Reuses the existing AsyncSessionLocal — assumes tests run against
@@ -31,7 +32,7 @@ async def db_session() -> AsyncSession:
 
 
 @pytest_asyncio.fixture
-async def client() -> AsyncClient:
+async def client() -> AsyncGenerator[AsyncClient, None]:
     """
     httpx AsyncClient wired directly to the FastAPI ASGI app —
     no real network/socket needed. Reuses the app's actual middleware

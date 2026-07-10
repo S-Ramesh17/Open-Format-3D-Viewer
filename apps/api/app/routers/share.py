@@ -58,10 +58,10 @@ async def resolve_share_link(
     Public endpoint — no authentication required.
     Returns the model data accessible via this share link.
     """
-    link, model_response = await share_svc.get_share_link(token, db)
+    link, public_model_response = await share_svc.get_share_link(token, db)
     return envelope({
         "link": ShareLinkResponse.model_validate(link).model_dump(mode="json"),
-        "model": model_response.model_dump(mode="json"),
+        "model": public_model_response.model_dump(mode="json"),
     })
 
 

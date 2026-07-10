@@ -25,7 +25,6 @@ class ShareLink(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    __table_args__ = (
+__table_args__ = (
         Index("ix_share_links_model_id", "model_id"),
-        Index("ix_share_links_token", "token"),
     )

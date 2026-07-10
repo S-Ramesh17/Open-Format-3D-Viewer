@@ -21,3 +21,15 @@ class ShareLinkResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+class PublicModelResponse(BaseModel):
+    """Redacted representation of a model for public view."""
+    id: uuid.UUID
+    name: str
+    file_format: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    chunk_urls: list[str]
+
+    model_config = {"from_attributes": True}
