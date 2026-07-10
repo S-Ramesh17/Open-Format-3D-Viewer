@@ -1,7 +1,6 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Request, Response
-from app.core.profiling import profile
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +38,6 @@ from app.services.oauth import get_google_authorization_url, handle_google_callb
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 
-@profile("auth_register")
 @router.post("/register", status_code=201)
 async def register(
     data: RegisterRequest,
@@ -57,7 +55,6 @@ async def register(
     return envelope_response
 
 
-@profile("auth_login")
 @router.post("/login")
 async def login(
     data: LoginRequest,

@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from app.core.request_id import get_request_id
 
 
-def envelope(data: Any, status_code: int = 200) -> JSONResponse:
+def envelope(data: Any, status_code: int = 200, meta_extra: dict | None = None) -> JSONResponse:
     """
     Wrap any payload in the standard API response envelope.
 
@@ -13,11 +13,13 @@ def envelope(data: Any, status_code: int = 200) -> JSONResponse:
         return envelope({"user": user})
         return envelope(token_response.model_dump(), status_code=201)
     """
+    meta = {"request_id": get_request_id()}
+    if meta_extra:
+        meta.update(meta_extra)
+        
     content = {
         "data": data,
-        "meta": {
-            "request_id": get_request_id(),
-        },
+        "meta": meta,
     }
     return JSONResponse(content=content, status_code=status_code)
 

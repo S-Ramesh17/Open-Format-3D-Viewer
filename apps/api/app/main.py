@@ -13,6 +13,8 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
 from app.routers import models as models_router
 from app.routers import annotations as annotations_router
+import asyncio
+
 from app.routers import webhooks as webhooks_router
 from app.routers import projects as projects_router
 from app.routers import share as share_router
@@ -63,7 +65,6 @@ async def lifespan(app: FastAPI):
             await collect_db_gauges(AsyncSessionLocal)
             await asyncio.sleep(15)
 
-    import asyncio
     _bg_task = asyncio.create_task(_gauge_loop())
 
     yield

@@ -36,7 +36,7 @@ class TestRegister:
             "/v1/auth/register",
             json={"email": unique_email, "password": "short"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
@@ -67,7 +67,7 @@ class TestLogin:
 
     async def test_login_validation_failure_missing_field(self, client: AsyncClient):
         resp = await client.post("/v1/auth/login", json={"email": "user@example.com"})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
 
 class TestRefresh:

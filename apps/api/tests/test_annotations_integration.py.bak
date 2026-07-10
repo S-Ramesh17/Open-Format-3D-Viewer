@@ -97,7 +97,7 @@ class TestCreateAnnotation:
             f"/v1/models/{model_id}/annotations",
             json={"title": "No position"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     async def test_create_nonexistent_model_returns_404(
         self, client: AsyncClient, unique_email: str
@@ -163,7 +163,7 @@ class TestUpdateAnnotation:
             f"/v1/annotations/{ann_id}",
             json={"status": "invalid_status"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     async def test_update_requires_auth(self, client: AsyncClient):
         resp = await client.patch(
@@ -211,7 +211,7 @@ class TestAnnotationComments:
             f"/v1/annotations/{ann_id}/comments",
             json={"body": "   "},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     async def test_comment_strips_html(self, client: AsyncClient, unique_email: str):
         _, model_id = await _setup_user_project_model(client, unique_email)

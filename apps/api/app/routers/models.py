@@ -11,6 +11,7 @@ from app.db.engine import get_db
 from app.models.user import User
 from app.schemas.models import ModelUploadRequest, ModelUploadResponse
 import app.services.models
+from app.core.profiling import profile
 
 router = APIRouter(prefix="/v1/models", tags=["models"])
 
@@ -95,16 +96,14 @@ async def list_all(
 
     items, next_cursor = await app.services.models.list_models(project_id, db, limit=limit, cursor=cursor)
 
-    return JSONResponse(
-        status_code=200,
-        content={
-            "data": [m.model_dump(mode="json") for m in items],
-            "meta": {"request_id": get_request_id(), "next_cursor": next_cursor},
-        },
+    return envelope(
+        [m.model_dump(mode="json") for m in items],
+        meta_extra={"next_cursor": next_cursor}
     )
 
 
 @router.post("/upload", status_code=201)
+@profile("upload_confirm")
 async def upload(
     data: ModelUploadRequest,
     current_user: User = Depends(get_current_user),
@@ -136,6 +135,7 @@ async def upload(
     return envelope(response.model_dump(mode="json"), status_code=201)
 
 @router.post("/{model_id}/confirm")
+@profile("model_confirm")
 async def confirm(
     model_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
@@ -200,12 +200,9 @@ async def elements(
         model_id, db, limit=limit, cursor=cursor, ifc_type=ifc_type, search=search
     )
 
-    return JSONResponse(
-        status_code=200,
-        content={
-            "data": [i.model_dump(mode="json") for i in items],
-            "meta": {"request_id": get_request_id(), "next_cursor": next_cursor},
-        },
+    return envelope(
+        [i.model_dump(mode="json") for i in items],
+        meta_extra={"next_cursor": next_cursor}
     )
 
 

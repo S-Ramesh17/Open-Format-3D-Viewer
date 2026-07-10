@@ -43,15 +43,9 @@ async def list_all(
 ) -> JSONResponse:
     projects, next_cursor = await list_projects(current_user, db, limit, cursor)
 
-    return JSONResponse(
-        status_code=200,
-        content={
-            "data": [p.model_dump(mode="json") for p in projects],
-            "meta": {
-                "request_id": get_request_id(),
-                "next_cursor": next_cursor,
-            },
-        },
+    return envelope(
+        [p.model_dump(mode="json") for p in projects],
+        meta_extra={"next_cursor": next_cursor}
     )
 
 

@@ -19,10 +19,11 @@ from app.services.annotations import (
     list_comments,
     update_annotation,
 )
+
 from app.services.models import get_model
+from app.core.profiling import profile
 
 router = APIRouter(prefix="/v1", tags=["annotations"])
-
 
 @router.get("/models/{model_id}/annotations")
 async def list_for_model(
@@ -39,16 +40,14 @@ async def list_for_model(
     items, next_cursor = await list_annotations(
         model_id, db, status_filter=status, limit=limit, cursor=cursor
     )
-    return JSONResponse(
-        status_code=200,
-        content={
-            "data": [i.model_dump(mode="json") for i in items],
-            "meta": {"request_id": get_request_id(), "next_cursor": next_cursor},
-        },
+    return envelope(
+        [i.model_dump(mode="json") for i in items],
+        meta_extra={"next_cursor": next_cursor}
     )
 
 
 @router.post("/models/{model_id}/annotations", status_code=201)
+@profile("annotation_create")
 async def create_for_model(
     model_id: uuid.UUID,
     data: AnnotationCreate,

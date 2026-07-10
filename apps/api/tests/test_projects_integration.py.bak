@@ -56,7 +56,7 @@ class TestCreateProject:
     async def test_create_missing_name_fails(self, client: AsyncClient, unique_email: str):
         await _register_and_login(client, unique_email)
         resp = await client.post("/v1/projects", json={"description": "No name"})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

@@ -22,21 +22,21 @@ class AppException(Exception):
 
 class ValidationException(AppException):
     """Invalid request data — field constraints, format errors."""
-    status_code = 422
+    status_code = 400
     error_code = "VALIDATION_ERROR"
     message = "Request validation failed"
 
 
 class FileTooLargeException(ValidationException):
     """Uploaded or declared file size exceeds the maximum allowed."""
-    status_code = 422
+    status_code = 413
     error_code = "FILE_TOO_LARGE"
     message = "File exceeds the maximum allowed size"
 
 
 class UnsupportedFormatException(ValidationException):
     """File extension or MIME type is not a supported 3D format."""
-    status_code = 422
+    status_code = 400
     error_code = "UNSUPPORTED_FORMAT"
     message = "File format is not supported"
 
@@ -85,7 +85,7 @@ class StorageException(AppException):
 
 class ProcessingException(AppException):
     """Model conversion or background processing failed."""
-    status_code = 422
+    status_code = 400
     error_code = "PROCESSING_ERROR"
     message = "Processing failed"
 
