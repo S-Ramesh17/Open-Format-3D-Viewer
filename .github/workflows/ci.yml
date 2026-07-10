@@ -7,8 +7,11 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  # ── API tests ────────────────────────────────────────────────────────────
+  test-api:
+    name: API Tests
     runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -18,28 +21,128 @@ jobs:
           POSTGRES_DB: openformat
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
       redis:
         image: redis:7-alpine
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      
-      - name: Install dependencies
-        run: |
-          pip install poetry
-          cd apps/api && poetry install
-      
-      - name: Run API Tests with Coverage Gate
+
+      - name: Install Poetry
+        run: pip install poetry==1.8.3
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: poetry install --no-interaction
+
+      - name: Run Alembic migrations
+        working-directory: apps/api
         env:
           DATABASE_URL: postgresql+asyncpg://openformat:openformat@localhost:5432/openformat
           REDIS_URL: redis://localhost:6379/0
-          ENVIRONMENT: testing
-        run: |
-          cd apps/api
-          poetry run pytest
+          SECRET_KEY: ci-test-secret-key-that-is-at-least-32-chars-long
+          ENVIRONMENT: development
+        run: poetry run alembic upgrade head
+
+      - name: Run API tests with coverage gate
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql+asyncpg://openformat:openformat@localhost:5432/openformat
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: ci-test-secret-key-that-is-at-least-32-chars-long
+          ENVIRONMENT: development
+          STORAGE_PROVIDER: local
+          LOCAL_STORAGE_PATH: /tmp/openformat_ci
+          CDN_BASE_URL: http://localhost:8000/files
+        run: poetry run pytest tests/ -v --tb=short
+
+  # ── Worker tests ─────────────────────────────────────────────────────────
+  test-worker:
+    name: Worker Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: openformat
+          POSTGRES_PASSWORD: openformat
+          POSTGRES_DB: openformat
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Poetry
+        run: pip install poetry==1.8.3
+
+      - name: Install worker dependencies
+        working-directory: apps/worker
+        run: poetry install --no-interaction
+
+      - name: Run worker tests
+        working-directory: apps/worker
+        env:
+          DATABASE_URL: postgresql://openformat:openformat@localhost:5432/openformat
+          REDIS_URL: redis://localhost:6379/0
+          STORAGE_PROVIDER: local
+          LOCAL_STORAGE_PATH: /tmp/openformat_ci
+          ENVIRONMENT: development
+        run: poetry run pytest tests/ -v --tb=short
+
+  # ── Build verification ────────────────────────────────────────────────────
+  build-check:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: [ test-api, test-worker ]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -t openformat-api:ci apps/api/
+
+      - name: Build Worker image
+        run: docker build -t openformat-worker:ci apps/worker/
+
+      - name: Build WS Server image
+        run: docker build -t openformat-ws:ci apps/ws-server/

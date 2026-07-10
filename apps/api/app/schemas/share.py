@@ -22,14 +22,19 @@ class ShareLinkResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+
 class PublicModelResponse(BaseModel):
-    """Redacted representation of a model for public view."""
+    """
+    Redacted representation of a model for public (unauthenticated) access
+    via a share link. Deliberately excludes project_id and uploaded_by
+    (internal identifiers that should not leak to anonymous viewers).
+    """
     id: uuid.UUID
-    name: str
+    name: str          # always populated in service layer via `name or original_filename`
     file_format: str
     status: str
     created_at: datetime
     updated_at: datetime
     chunk_urls: list[str]
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": False}  # constructed manually in service, not from ORM

@@ -10,12 +10,13 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundException, ValidationException
+from app.core.exceptions import AuthorizationException, NotFoundException, ValidationException
 from app.models.share_link import ShareLink
 from app.models.model import Model
 from app.models.model_metadata import ModelMetadata
 from app.schemas.share import PublicModelResponse
 from app.config import settings
+
 
 def _generate_token() -> str:
     """Generate a 48-character URL-safe random token (288 bits of entropy)."""
@@ -28,7 +29,7 @@ async def create_share_link(
     expires_at: datetime | None,
     db: AsyncSession,
 ) -> ShareLink:
-    # Verify model exists and belongs to user's project (membership checked in router)
+    # Verify model exists (membership already checked in router before this call)
     result = await db.execute(select(Model).where(Model.id == model_id))
     if not result.scalar_one_or_none():
         raise NotFoundException("Model not found")
@@ -49,7 +50,8 @@ async def create_share_link(
 
 async def get_share_link(token: str, db: AsyncSession) -> tuple[ShareLink, PublicModelResponse]:
     """
-    Resolve a share token. Raises NotFoundException if invalid, expired, or revoked.
+    Resolve a share token.
+    Raises NotFoundException if invalid, expired, or revoked.
     Returns (link, public_model_response) for read-only access.
     """
     result = await db.execute(
@@ -60,7 +62,7 @@ async def get_share_link(token: str, db: AsyncSession) -> tuple[ShareLink, Publi
     if not link or link.revoked:
         raise NotFoundException("Share link not found or has been revoked")
 
-    if link.expires_at and link.expires_at < datetime.now(timezone.utc):
+    if link.expires_at and link.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         raise ValidationException("Share link has expired")
 
     model_result = await db.execute(select(Model).where(Model.id == link.model_id))
@@ -68,27 +70,35 @@ async def get_share_link(token: str, db: AsyncSession) -> tuple[ShareLink, Publi
     if not model:
         raise NotFoundException("Model not found")
 
-    meta_result = await db.execute(select(ModelMetadata).where(ModelMetadata.model_id == model.id))
+    meta_result = await db.execute(
+        select(ModelMetadata).where(ModelMetadata.model_id == model.id)
+    )
     metadata = meta_result.scalar_one_or_none()
-    
-    chunk_urls = []
+
+    chunk_urls: list[str] = []
     if metadata and metadata.properties:
-        keys = metadata.properties.get("xkt_chunks") or metadata.properties.get("processed_keys") or []
-        base_cdn = settings.CDN_BASE_URL.rstrip("/")
-        chunk_urls = [f"{base_cdn}/{k}" for k in keys]
+        keys = (
+            metadata.properties.get("xkt_chunks")
+            or metadata.properties.get("processed_keys")
+            or []
+        )
+        if settings.STORAGE_PROVIDER == "local":
+            chunk_urls = [f"/files/{k}" for k in keys]
+        else:
+            base_cdn = settings.CDN_BASE_URL.rstrip("/")
+            chunk_urls = [f"{base_cdn}/{k}" for k in keys]
 
-    # Convert to response dictionary to satisfy pydantic since model doesn't natively have chunk_urls
-    model_data = {
-        "id": model.id,
-        "name": model.name,
-        "file_format": model.file_format,
-        "status": model.status,
-        "created_at": model.created_at,
-        "updated_at": model.updated_at,
-        "chunk_urls": chunk_urls,
-    }
+    public = PublicModelResponse(
+        id=model.id,
+        name=model.name or model.original_filename,
+        file_format=model.file_format,
+        status=model.status,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+        chunk_urls=chunk_urls,
+    )
 
-    return link, PublicModelResponse.model_validate(model_data)
+    return link, public
 
 
 async def revoke_share_link(
@@ -103,7 +113,6 @@ async def revoke_share_link(
         raise NotFoundException("Share link not found")
 
     if link.created_by != user_id:
-        from app.core.exceptions import AuthorizationException
         raise AuthorizationException("You do not have permission to revoke this share link")
 
     link.revoked = True
@@ -114,9 +123,16 @@ async def list_share_links(
     model_id: uuid.UUID,
     db: AsyncSession,
 ) -> list[ShareLink]:
+    # BUG FIX: use SQLAlchemy == operator, not Python `is` operator.
+    # `ShareLink.revoked is False` is always False in Python (Column is not
+    # the same object as False), so the WHERE clause was never applied and
+    # revoked links were being returned.
     result = await db.execute(
         select(ShareLink)
-        .where(ShareLink.model_id == model_id, ShareLink.revoked is False)
+        .where(
+            ShareLink.model_id == model_id,
+            ShareLink.revoked == False,  # noqa: E712 — SQLAlchemy requires ==, not `is`
+        )
         .order_by(ShareLink.created_at.desc())
     )
     return list(result.scalars().all())
