@@ -59,7 +59,7 @@ async def create_annotation(
 
     await publish_model_event(
         str(user_id),
-        "ANNOTATION_UPDATED",
+        "ANNOTATION_CREATED",
         {"annotation_id": str(annotation.id), "model_id": str(model_id), "action": "created"},
     )
     await dispatch_event(

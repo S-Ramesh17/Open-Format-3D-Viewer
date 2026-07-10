@@ -22,6 +22,7 @@ import tempfile
 
 import boto3
 from botocore.config import Config as BotoConfig
+from celery.exceptions import MaxRetriesExceededError
 
 from app.celery_app import celery_app
 from app.config import settings
@@ -180,6 +181,31 @@ def _publish_scan_failure(user_id: str, model_id: str, virus_name: str) -> None:
         logger.error("[SCAN] Failed to publish scan failure event: %s", exc)
 
 
+def _publish_scan_error(user_id: str, model_id: str, error: str) -> None:
+    """Publish a MODEL_FAILED event for a non-infection scan failure (unexpected
+    error or retries exhausted), so connected clients learn the model is dead
+    instead of waiting indefinitely for a MODEL_READY that will never come."""
+    import redis as redis_lib
+
+    try:
+        r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+        r.publish(
+            f"model_events:{user_id}",
+            json.dumps({
+                "event": "MODEL_FAILED",
+                "data": {
+                    "model_id": model_id,
+                    "error": error,
+                    "reason": "scan_error",
+                },
+            }),
+        )
+        r.close()
+        logger.warning("[SCAN] Published model:failed (scan_error) for model_id=%s", model_id)
+    except Exception as exc:
+        logger.error("[SCAN] Failed to publish scan error event: %s", exc)
+
+
 def _dispatch_processing_task(model_id: str, file_format: str | None) -> None:
     """
     Dispatch the correct processing task once the scan confirms the file
@@ -304,17 +330,39 @@ def scan_file(self, model_id: str, s3_key: str) -> dict:
 
     except (socket.error, ConnectionRefusedError, OSError) as exc:
         logger.error("[SCAN] Transient error scanning model_id=%s: %s", model_id, exc)
-        # Retry on connectivity issues
-        raise self.retry(exc=exc, countdown=30 * (self.request.retries + 1))
+        try:
+            # Retry on connectivity issues
+            raise self.retry(exc=exc, countdown=30 * (self.request.retries + 1))
+        except MaxRetriesExceededError:
+            logger.error(
+                "[SCAN] Retries exhausted scanning model_id=%s — marking failed", model_id
+            )
+            update_model_status(
+                engine,
+                model_id,
+                "failed",
+                error_message=f"Antivirus scan unreachable after retries: {str(exc)[:200]}",
+            )
+            _publish_scan_error(
+                user_id, model_id, f"Antivirus scan unreachable after retries: {str(exc)[:200]}"
+            )
+            return {
+                "model_id": model_id,
+                "s3_key": s3_key,
+                "status": "error",
+                "error": str(exc)[:400],
+            }
 
     except Exception as exc:
         logger.exception("[SCAN] Unexpected error scanning model_id=%s: %s", model_id, exc)
+        error_message = f"Antivirus scan failed unexpectedly: {str(exc)[:200]}"
         update_model_status(
             engine,
             model_id,
             "failed",
-            error_message=f"Antivirus scan failed unexpectedly: {str(exc)[:200]}"
+            error_message=error_message,
         )
+        _publish_scan_error(user_id, model_id, error_message)
         return {
             "model_id": model_id,
             "s3_key": s3_key,

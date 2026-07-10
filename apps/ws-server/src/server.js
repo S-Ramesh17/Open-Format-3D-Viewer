@@ -320,6 +320,7 @@ connectedClients.inc();
         if (client.pongTimer) clearTimeout(client.pongTimer);
         break;
       }
+      case 'ANNOTATION_CREATED':
       case 'ANNOTATION_UPDATED':
       case 'MODEL_SYNC': {
         if (currentModelId) {
