@@ -132,6 +132,22 @@ class TestRefresh:
         resp = await client.post("/v1/auth/refresh")
         assert resp.status_code == 401
 
+    async def test_refresh_token_cannot_be_reused(self, client: AsyncClient, unique_email: str):
+        """refresh_access_token() deletes the refresh token after issuing new
+        ones (rotation). Reusing the same (now-revoked) refresh token must
+        fail — otherwise a leaked refresh token would be replayable forever."""
+        reg = await client.post(
+            "/v1/auth/register",
+            json={"email": unique_email, "password": "testpass123"},
+        )
+        refresh_token = reg.json()["data"]["refresh_token"]
+
+        first = await client.post("/v1/auth/refresh", json={"refresh_token": refresh_token})
+        assert first.status_code == 200
+
+        second = await client.post("/v1/auth/refresh", json={"refresh_token": refresh_token})
+        assert second.status_code == 401
+
 
 class TestLogout:
     async def test_logout_returns_204(self, client: AsyncClient, unique_email: str):
@@ -183,6 +199,15 @@ class TestMe:
         )
         assert resp.status_code == 200
         assert resp.json()["data"]["email"] == unique_email
+
+    async def test_me_with_malformed_bearer_token_fails(self, client: AsyncClient):
+        """An invalid/tampered JWT must be rejected the same way as a
+        missing one (401), not raise an unhandled 500."""
+        resp = await client.get(
+            "/v1/auth/me",
+            headers={"Authorization": "Bearer not.a.valid.jwt"},
+        )
+        assert resp.status_code == 401
 
 
 class TestApiKeys:

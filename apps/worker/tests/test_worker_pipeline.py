@@ -334,6 +334,36 @@ class TestRedisEventFlow:
             from app.tasks.common import publish_model_ready
             publish_model_ready("user-1", "model-1")  # must not raise
 
+    def test_publish_model_progress_sends_model_processing_event(self):
+        """MODEL_PROCESSING is emitted via publish_model_progress (percent +
+        stage) — this event name/payload had no coverage before."""
+        user_id = str(uuid.uuid4())
+        model_id = str(uuid.uuid4())
+        published_payloads = []
+
+        mock_redis = MagicMock()
+        mock_redis.publish.side_effect = lambda ch, msg: published_payloads.append(
+            (ch, json.loads(msg))
+        )
+        mock_redis.close.return_value = None
+
+        with patch("redis.from_url", return_value=mock_redis):
+            from app.tasks.common import publish_model_progress
+            publish_model_progress(user_id, model_id, 42, "convert")
+
+        assert len(published_payloads) == 1
+        channel, payload = published_payloads[0]
+        assert channel == f"model_events:{user_id}"
+        assert payload["event"] == "MODEL_PROCESSING"
+        assert payload["data"]["model_id"] == model_id
+        assert payload["data"]["progress_pct"] == 42
+        assert payload["data"]["stage"] == "convert"
+
+    def test_publish_model_progress_redis_unavailable_does_not_raise(self):
+        with patch("redis.from_url", side_effect=Exception("Redis down")):
+            from app.tasks.common import publish_model_progress
+            publish_model_progress("user-1", "model-1", 50, "convert")  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # Worker reliability — idempotency and locking
@@ -430,3 +460,71 @@ class TestWorkerStorage:
              patch("app.config.settings.CDN_BASE_URL", "https://cdn.example.com/"):
             from app.tasks.common import build_cdn_url
             assert build_cdn_url("processed/model-1/chunk_0.xkt") == "https://cdn.example.com/processed/model-1/chunk_0.xkt"
+
+
+# ---------------------------------------------------------------------------
+# Abandoned-upload sweeper (Celery Beat, hourly) — previously untested
+# ---------------------------------------------------------------------------
+
+class TestAbandonedUploadSweeper:
+    """
+    cleanup_abandoned_uploads() finds models stuck in 'pending' (uploaded
+    but never confirmed) for >24h, marks them 'failed', and deletes the
+    orphaned raw object so it doesn't sit in storage forever. Covers the
+    "cleanup" item from the worker reliability checklist.
+    """
+
+    def test_marks_stale_pending_models_failed_and_deletes_object(self):
+        model_id = str(uuid.uuid4())
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [
+            (model_id, "user/model/abandoned.ifc"),
+        ]
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value.__enter__.return_value = mock_conn
+
+        with patch("app.tasks.common.get_sync_engine", return_value=mock_engine), \
+             patch("app.tasks.common.update_model_status") as mock_update_status, \
+             patch("app.tasks.scan._delete_s3_object") as mock_delete:
+            from app.tasks.common import cleanup_abandoned_uploads
+            cleanup_abandoned_uploads()
+
+        mock_update_status.assert_called_once()
+        call_args = mock_update_status.call_args
+        assert call_args.args[1] == model_id
+        assert call_args.args[2] == "failed"
+        mock_delete.assert_called_once_with("user/model/abandoned.ifc")
+
+    def test_no_stale_uploads_does_nothing(self):
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = []
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value.__enter__.return_value = mock_conn
+
+        with patch("app.tasks.common.get_sync_engine", return_value=mock_engine), \
+             patch("app.tasks.common.update_model_status") as mock_update_status:
+            from app.tasks.common import cleanup_abandoned_uploads
+            cleanup_abandoned_uploads()
+
+        mock_update_status.assert_not_called()
+
+    def test_s3_delete_failure_does_not_raise_or_block_other_rows(self):
+        """A storage delete failure for one abandoned upload must not stop
+        the model from being marked failed, nor crash the sweeper task
+        (it runs hourly via Celery Beat — an unhandled exception here would
+        kill the whole periodic task, not just one row)."""
+        model_id = str(uuid.uuid4())
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [
+            (model_id, "user/model/abandoned.ifc"),
+        ]
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value.__enter__.return_value = mock_conn
+
+        with patch("app.tasks.common.get_sync_engine", return_value=mock_engine), \
+             patch("app.tasks.common.update_model_status") as mock_update_status, \
+             patch("app.tasks.scan._delete_s3_object", side_effect=Exception("S3 unreachable")):
+            from app.tasks.common import cleanup_abandoned_uploads
+            cleanup_abandoned_uploads()  # must not raise
+
+        mock_update_status.assert_called_once()

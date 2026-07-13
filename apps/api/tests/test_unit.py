@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.core.exceptions import ValidationException
+from app.core.exceptions import FileTooLargeException, ValidationException
 from app.services.storage import (
     validate_filename,
     validate_file_size,
@@ -155,6 +155,36 @@ class TestValidateFileSize:
         from app.services.storage import PLAN_MAX_UPLOAD_BYTES
         with pytest.raises(ValidationException):
             validate_file_size(PLAN_MAX_UPLOAD_BYTES["free"] + 1)
+
+    def test_pro_plan_allows_above_free_limit(self):
+        """A file too big for free (50MB) must pass under pro's 500MB cap."""
+        from app.services.storage import PLAN_MAX_UPLOAD_BYTES
+        oversized_for_free = PLAN_MAX_UPLOAD_BYTES["free"] + 1
+        validate_file_size(oversized_for_free, plan="pro")  # should not raise
+
+    def test_pro_plan_rejects_above_its_own_limit(self):
+        from app.services.storage import PLAN_MAX_UPLOAD_BYTES
+        with pytest.raises(FileTooLargeException):
+            validate_file_size(PLAN_MAX_UPLOAD_BYTES["pro"] + 1, plan="pro")
+
+    def test_enterprise_plan_allows_above_pro_limit(self):
+        """Enterprise's 5GB cap — the whole reason this plan value needed
+        to exist in the DB enum in the first place (see test_plan_enum.py)."""
+        from app.services.storage import PLAN_MAX_UPLOAD_BYTES
+        oversized_for_pro = PLAN_MAX_UPLOAD_BYTES["pro"] + 1
+        validate_file_size(oversized_for_pro, plan="enterprise")  # should not raise
+
+    def test_enterprise_plan_still_rejects_above_5gb(self):
+        from app.services.storage import PLAN_MAX_UPLOAD_BYTES
+        with pytest.raises(FileTooLargeException):
+            validate_file_size(PLAN_MAX_UPLOAD_BYTES["enterprise"] + 1, plan="enterprise")
+
+    def test_unknown_plan_falls_back_to_free_limit(self):
+        """Defensive default — an unrecognized plan string must not
+        silently grant an unbounded upload size."""
+        from app.services.storage import PLAN_MAX_UPLOAD_BYTES
+        with pytest.raises(FileTooLargeException):
+            validate_file_size(PLAN_MAX_UPLOAD_BYTES["free"] + 1, plan="not-a-real-plan")
 
 
 class TestValidateMimeDeclared:
@@ -455,3 +485,55 @@ class TestValidateFilenameDay3:
     def test_unsupported_extension_rejected(self):
         with pytest.raises(ValidationException):
             self._validate("script.exe")
+
+
+# ---------------------------------------------------------------------------
+# services/projects.py — invite race condition
+# ---------------------------------------------------------------------------
+
+class TestInviteProjectMemberRaceCondition:
+    """
+    invite_project_member() pre-checks for an existing membership row, then
+    inserts. Between those two steps, a concurrent duplicate request can
+    win the race and insert first — the DB's UniqueConstraint(project_id,
+    user_id) then raises IntegrityError on this request's commit. That
+    branch (rollback + ConflictException, as opposed to the pre-check 409)
+    had no test coverage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_duplicate_insert_returns_conflict_not_500(self):
+        from sqlalchemy.exc import IntegrityError
+        from app.services.projects import invite_project_member
+        from app.schemas.projects import ProjectMemberInvite
+        from app.core.exceptions import ConflictException
+
+        project_id = uuid.uuid4()
+        mock_user = MagicMock()
+        mock_user.id = uuid.uuid4()
+        mock_user.email = "race@example.com"
+        mock_user.full_name = "Race Condition"
+
+        mock_db = AsyncMock(spec=AsyncSession)
+        mock_db.execute = AsyncMock(
+            side_effect=[
+                # 1. select(User) by email — found
+                MagicMock(scalar_one_or_none=MagicMock(return_value=mock_user)),
+                # 2. pre-check select(ProjectMember) — nothing yet (the race)
+                MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+            ]
+        )
+        mock_db.add = MagicMock()
+        # The concurrent request's insert already committed by the time
+        # this one commits — DB constraint fires here instead.
+        mock_db.commit = AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("duplicate key")))
+        mock_db.rollback = AsyncMock()
+
+        with pytest.raises(ConflictException):
+            await invite_project_member(
+                project_id,
+                ProjectMemberInvite(email="race@example.com", role="viewer"),
+                mock_db,
+            )
+
+        mock_db.rollback.assert_awaited_once()

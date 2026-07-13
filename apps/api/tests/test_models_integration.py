@@ -318,3 +318,142 @@ class TestDeleteModel:
 
         get_resp = await client.get(f"/v1/models/{model_id}")
         assert get_resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Chunks — GET /{model_id}/chunks
+#
+# No test exercised this endpoint at all before. Reaching a "ready" model
+# with real chunk metadata isn't possible through the plain upload/confirm
+# HTTP flow (that requires the worker pipeline to actually run), so this
+# uses the same direct-DB setup pattern as test_share_links.py's
+# share_test_data fixture.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+async def chunks_test_data(db_session):
+    from app.models.model import Model
+    from app.models.model_metadata import ModelMetadata
+    from app.models.project import Project
+    from app.models.project_member import ProjectMember
+    from app.models.user import User
+
+    owner = User(
+        id=uuid.uuid4(),
+        email=f"chunkowner_{uuid.uuid4().hex[:8]}@example.com",
+        password_hash="$2b$12$notarealhash",
+        full_name="Chunk Owner",
+    )
+    db_session.add(owner)
+
+    outsider = User(
+        id=uuid.uuid4(),
+        email=f"chunkoutsider_{uuid.uuid4().hex[:8]}@example.com",
+        password_hash="$2b$12$notarealhash",
+        full_name="Outsider",
+    )
+    db_session.add(outsider)
+    await db_session.flush()
+
+    project = Project(id=uuid.uuid4(), name="Chunks Test Project", owner_id=owner.id)
+    db_session.add(project)
+    await db_session.flush()
+    db_session.add(
+        ProjectMember(id=uuid.uuid4(), project_id=project.id, user_id=owner.id, role="admin")
+    )
+
+    pending_model = Model(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        uploaded_by=owner.id,
+        name="Pending Model",
+        original_filename="pending.ifc",
+        file_format="ifc",
+        file_size_bytes=1024,
+        s3_raw_key="raw/pending.ifc",
+        status="pending",
+    )
+    db_session.add(pending_model)
+
+    ready_model = Model(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        uploaded_by=owner.id,
+        name="Ready Model",
+        original_filename="ready.ifc",
+        file_format="ifc",
+        file_size_bytes=1024,
+        s3_raw_key="raw/ready.ifc",
+        s3_processed_prefix="processed/ready/",
+        status="ready",
+    )
+    db_session.add(ready_model)
+    await db_session.flush()
+
+    db_session.add(
+        ModelMetadata(
+            model_id=ready_model.id,
+            properties={"xkt_chunks": ["processed/ready/part0.xkt", "processed/ready/part1.xkt"]},
+            spatial_tree={},
+        )
+    )
+    await db_session.commit()
+
+    return {
+        "owner": owner,
+        "outsider": outsider,
+        "project": project,
+        "pending_model": pending_model,
+        "ready_model": ready_model,
+    }
+
+
+def _chunk_auth_header(user_id) -> dict[str, str]:
+    from app.core.security import create_access_token
+    token = create_access_token(str(user_id))
+    return {"Authorization": f"Bearer {token}"}
+
+
+class TestModelChunks:
+    async def test_chunks_requires_auth(self, client: AsyncClient, chunks_test_data: dict):
+        model = chunks_test_data["ready_model"]
+        resp = await client.get(f"/v1/models/{model.id}/chunks")
+        assert resp.status_code == 401
+
+    async def test_chunks_requires_project_membership(
+        self, client: AsyncClient, chunks_test_data: dict
+    ):
+        model = chunks_test_data["ready_model"]
+        outsider = chunks_test_data["outsider"]
+        resp = await client.get(
+            f"/v1/models/{model.id}/chunks",
+            headers=_chunk_auth_header(outsider.id),
+        )
+        assert resp.status_code == 403
+
+    async def test_chunks_pending_model_returns_empty_list(
+        self, client: AsyncClient, chunks_test_data: dict
+    ):
+        model = chunks_test_data["pending_model"]
+        owner = chunks_test_data["owner"]
+        resp = await client.get(
+            f"/v1/models/{model.id}/chunks",
+            headers=_chunk_auth_header(owner.id),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["chunks"] == []
+
+    async def test_chunks_ready_model_returns_cdn_urls_from_metadata(
+        self, client: AsyncClient, chunks_test_data: dict
+    ):
+        model = chunks_test_data["ready_model"]
+        owner = chunks_test_data["owner"]
+        resp = await client.get(
+            f"/v1/models/{model.id}/chunks",
+            headers=_chunk_auth_header(owner.id),
+        )
+        assert resp.status_code == 200
+        body = resp.json()["data"]
+        assert body["model_id"] == str(model.id)
+        assert len(body["chunks"]) == 2
+        assert body["chunks"][0].endswith("processed/ready/part0.xkt")

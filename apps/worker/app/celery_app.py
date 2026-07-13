@@ -1,5 +1,7 @@
+import importlib
+import os
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, worker_process_shutdown
 
 from app.config import settings
 from app.sentry import init_worker_sentry
@@ -12,6 +14,30 @@ def _configure_worker_logging(**kwargs):
     """Configure JSON logging once per worker process after fork."""
     from app.logging import configure_worker_logging
     configure_worker_logging(settings.ENVIRONMENT)
+
+
+@worker_process_shutdown.connect
+def _cleanup_prometheus_multiproc_files(pid, **kwargs):
+    """
+    Celery's prefork pool forks a fresh child per --concurrency slot, and
+    recycles children based on max_tasks_per_child / crashes. Each child
+    gets its own PID-keyed *.db shard under PROMETHEUS_MULTIPROC_DIR (that's
+    the whole point of multiprocess mode). Without this, a dead child's
+    shard files linger forever and MultiProcessCollector keeps aggregating
+    metrics from PIDs that no longer exist — this is prometheus_client's
+    own documented cleanup hook for exactly that (see
+    prometheus_client.multiprocess.mark_process_dead). No-op if
+    PROMETHEUS_MULTIPROC_DIR isn't set (e.g. the `beat` service, which
+    doesn't run in multiprocess mode).
+    """
+    if not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        return
+    try:
+        multiprocess = importlib.import_module("prometheus_client.multiprocess")
+        multiprocess.mark_process_dead(pid)
+    except Exception:
+        pass
+
 
 celery_app = Celery(
     "openformat_worker",

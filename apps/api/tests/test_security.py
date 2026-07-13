@@ -53,3 +53,23 @@ class TestJWT:
     def test_decode_invalid_token_raises(self):
         with pytest.raises(JWTError):
             decode_token("not.a.valid.token")
+
+    def test_decode_expired_token_raises(self):
+        """ExpiredSignatureError is a JWTError subclass — decode_token must
+        surface it the same way as any other invalid token, since callers
+        (AuthMiddleware, refresh_access_token) only catch JWTError."""
+        import time
+        from jose import jwt as jose_jwt
+        from app.config import settings
+        from app.core.security import ALGORITHM
+
+        expired_payload = {
+            "sub": "user-expired",
+            "type": "access",
+            "iat": int(time.time()) - 7200,
+            "exp": int(time.time()) - 3600,  # expired 1 hour ago
+        }
+        expired_token = jose_jwt.encode(expired_payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+        with pytest.raises(JWTError):
+            decode_token(expired_token)

@@ -376,6 +376,22 @@ class TestProjectMembers:
         )
         assert resp.status_code == 409
 
+    async def test_invite_member_invalid_role_fails(self, client: AsyncClient, unique_email: str):
+        """ProjectMemberInvite.role_valid only accepts viewer/editor/admin —
+        this was validated in the schema but never exercised by a test."""
+        email_b = f"badrole_{unique_email}"
+        await _register_only(email_b)
+
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Invite Bad Role"})
+        project_id = create_resp.json()["data"]["id"]
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/members",
+            json={"email": email_b, "role": "superadmin"},
+        )
+        assert resp.status_code == 400
+
     async def test_invite_member_requires_admin(self, client: AsyncClient, unique_email: str):
         email_owner = unique_email
         email_viewer = f"viewer_{unique_email}"
@@ -430,6 +446,23 @@ class TestProjectMembers:
             f"/v1/projects/{project_id}/members/{owner_user_id}", json={"role": "viewer"}
         )
         assert resp.status_code == 409
+
+    async def test_update_member_role_invalid_role_fails(self, client: AsyncClient, unique_email: str):
+        email_b = f"badrole2_{unique_email}"
+        await _register_only(email_b)
+
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Bad Role Update"})
+        project_id = create_resp.json()["data"]["id"]
+        invite_resp = await client.post(
+            f"/v1/projects/{project_id}/members", json={"email": email_b, "role": "viewer"}
+        )
+        user_id = invite_resp.json()["data"]["user_id"]
+
+        resp = await client.patch(
+            f"/v1/projects/{project_id}/members/{user_id}", json={"role": "superadmin"}
+        )
+        assert resp.status_code == 400
 
     # -- Remove member -------------------------------------------------------
 

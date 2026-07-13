@@ -99,3 +99,56 @@ class TestConverterMissingModelHandling:
         assert result["model_id"] == model_id
         # release_task_lock() must have run so a follow-up retry can reacquire.
         mock_redis.delete.assert_called()
+
+
+class TestConverterTimeoutHandling:
+    """
+    Regression coverage for the soft_time_limit=1500 configured on every
+    converter task. Celery raises SoftTimeLimitExceeded inside the running
+    task when a job overruns its soft limit; each converter wraps its
+    pipeline in `except SoftTimeLimitExceeded: return handle_task_failure(...)`
+    so a hung/slow conversion (e.g. a pathological mesh) ends the model in
+    "failed" with a clear reason instead of being silently killed by Celery
+    with no DB/WS record of what happened. Previously untested for all five
+    converters.
+    """
+
+    def _unlocked_ready_redis(self) -> MagicMock:
+        mock_redis = MagicMock()
+        mock_redis.set.return_value = True  # lock acquired
+        mock_redis.delete.return_value = 1
+        mock_redis.close.return_value = None
+        return mock_redis
+
+    def _model_row(self, model_id: str) -> dict:
+        return {
+            "id": model_id,
+            "uploaded_by": str(uuid.uuid4()),
+            "s3_raw_key": "user/model/test.bin",
+            "s3_processed_prefix": None,
+            "status": "processing",
+            "file_format": "test",
+        }
+
+    @pytest.mark.parametrize("task,mod", CONVERTERS, ids=[m for _, m in CONVERTERS])
+    def test_soft_time_limit_exceeded_marks_failed_not_raised(self, task, mod):
+        from celery.exceptions import SoftTimeLimitExceeded
+
+        model_id = str(uuid.uuid4())
+        mock_handle_failure = MagicMock(
+            return_value={"model_id": model_id, "status": "failed", "error": "soft time limit"}
+        )
+
+        with patch(f"{mod}.get_sync_engine"), \
+             patch(f"{mod}.get_model_row", return_value=self._model_row(model_id)), \
+             patch(f"{mod}.download_raw_file", side_effect=SoftTimeLimitExceeded("soft time limit")), \
+             patch(f"{mod}.handle_task_failure", mock_handle_failure), \
+             patch("redis.from_url", return_value=self._unlocked_ready_redis()):
+            result = task.apply(args=[model_id]).get()
+
+        mock_handle_failure.assert_called_once()
+        call_args = mock_handle_failure.call_args.args
+        # (engine, model_id, user_id, stage, exc) — exc must be the timeout.
+        assert call_args[1] == model_id
+        assert isinstance(call_args[4], SoftTimeLimitExceeded)
+        assert result == mock_handle_failure.return_value

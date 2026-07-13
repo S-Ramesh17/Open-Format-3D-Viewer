@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     nodejs \
     npm \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local /usr/local
@@ -38,7 +39,15 @@ RUN groupadd -r appuser \
     && mkdir -p /data/openformat \
     && chown -R appuser:appuser /app /data/openformat
 
-USER appuser
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Intentionally NOT `USER appuser` here — the container must start as root
+# so entrypoint.sh can fix ownership of PROMETHEUS_MULTIPROC_DIR (a tmpfs
+# mounted fresh, root-owned, at container start — see entrypoint.sh for
+# why this can't be done at image build time). entrypoint.sh drops to
+# appuser via gosu before the real process starts.
+ENTRYPOINT ["/entrypoint.sh"]
 
 CMD ["celery", "-A", "app.celery_app.celery_app", "worker", \
      "--loglevel=info", \
