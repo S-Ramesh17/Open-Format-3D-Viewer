@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictException, NotFoundException
@@ -181,7 +182,15 @@ async def invite_project_member(
         role=data.role,
     )
     db.add(member)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Concurrent request won the race and inserted first — the DB's
+        # UniqueConstraint("project_id", "user_id") caught it. Same outcome
+        # as the check above finding an existing row: a clean conflict, not
+        # an unhandled 500.
+        await db.rollback()
+        raise ConflictException("This user is already a member of the project")
     await db.refresh(member)
 
     return ProjectMemberResponse(

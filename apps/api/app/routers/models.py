@@ -54,6 +54,25 @@ async def upload_local_file(
     if ".." in storage_key or storage_key.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid storage_key.")
 
+    # Security: storage_key alone does not prove the caller owns this upload —
+    # it is returned by POST /upload and is not secret (visible in browser
+    # devtools/network logs), so without this check any authenticated user
+    # could write bytes into another user's model by guessing/observing their
+    # storage_key. Parse the model_id out of it and require the same
+    # project-editor role that /confirm and /upload already enforce.
+    key_parts = storage_key.split("/")
+    if len(key_parts) != 3:
+        raise HTTPException(status_code=400, detail="Invalid storage_key.")
+    try:
+        key_model_id = uuid.UUID(key_parts[1])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid storage_key.")
+
+    from app.core.authorization import require_role_for_project
+
+    model_for_auth = await app.services.models.get_model(key_model_id, db)
+    await require_role_for_project(model_for_auth.project_id, "editor", current_user, db)
+
     dest = os.path.join(settings.LOCAL_STORAGE_PATH, "raw", storage_key)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
 
