@@ -69,6 +69,45 @@ class ProjectUpdate(BaseModel):
         return None
 
 
+class ProjectMemberInvite(BaseModel):
+    email: str = Field(
+        ...,
+        description="Email of an existing registered user to add to the project.",
+        examples=["colleague@example.com"],
+    )
+    role: str = Field(
+        default="viewer",
+        description="Initial role for the invited member.",
+        examples=["viewer"],
+    )
+
+    @field_validator("email")
+    @classmethod
+    def email_normalise(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v or "@" not in v:
+            raise ValueError("A valid email is required")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def role_valid(cls, v: str) -> str:
+        if v not in {"viewer", "editor", "admin"}:
+            raise ValueError("role must be one of: viewer, editor, admin")
+        return v
+
+
+class ProjectMemberRoleUpdate(BaseModel):
+    role: str = Field(..., description="New role for the member.", examples=["editor"])
+
+    @field_validator("role")
+    @classmethod
+    def role_valid(cls, v: str) -> str:
+        if v not in {"viewer", "editor", "admin"}:
+            raise ValueError("role must be one of: viewer, editor, admin")
+        return v
+
+
 # ── Response schemas ─────────────────────────────────────────────────────────
 
 class ProjectMemberResponse(BaseModel):

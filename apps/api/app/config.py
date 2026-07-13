@@ -2,7 +2,7 @@
 from typing import Literal
 
 from pydantic_settings import BaseSettings
-from pydantic import computed_field, field_validator
+from pydantic import Field, computed_field, field_validator
 
 # Placeholder values that must never be used as a real secret. Checked
 # case-insensitively so ".env.example" style values are always rejected.
@@ -14,11 +14,9 @@ _PLACEHOLDER_SECRET_KEYS = {
     "your-secret-key-here",
     "dev-secret-change-in-prod",
 }
-
-
 class Settings(BaseSettings):
     DATABASE_URL: str
-    SECRET_KEY: str
+    SECRET_KEY: str = Field(validation_alias="JWT_SECRET")
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"
 
     @field_validator("SECRET_KEY")

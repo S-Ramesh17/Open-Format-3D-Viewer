@@ -18,10 +18,20 @@ jobs:
           POSTGRES_DB: openformat
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openformat"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       redis:
         image: redis:7-alpine
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - uses: actions/checkout@v4
@@ -37,19 +47,20 @@ jobs:
           cd apps/api && poetry install
           cd ../worker && poetry install
       
-      - name: Run API Tests with Coverage Gate
+       - name: Run API Tests with Coverage Gate
         env:
           DATABASE_URL: postgresql+asyncpg://openformat:openformat@localhost:5432/openformat
           REDIS_URL: redis://localhost:6379/0
-          ENVIRONMENT: testing
-          JWT_SECRET: testing_secret_key_12345
+          ENVIRONMENT: development
+          SECRET_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         run: |
           cd apps/api
           poetry run alembic upgrade head
           poetry run pytest
           
-      - name: Run Worker Tests
+      - name: Run Worker Tests 
         env:
+          DATABASE_URL: postgresql://openformat:openformat@localhost:5432/openformat
           REDIS_URL: redis://localhost:6379/0
           ENVIRONMENT: development
         run: |

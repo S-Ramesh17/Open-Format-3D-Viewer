@@ -6,7 +6,7 @@ All tests run against the real FastAPI ASGI app via httpx AsyncClient.
 """
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 import uuid
 pytestmark = pytest.mark.asyncio
 
@@ -21,6 +21,23 @@ async def _register_and_login(client: AsyncClient, email: str) -> AsyncClient:
         json={"email": email, "password": "testpass123", "full_name": "Test User"},
     )
     return client
+
+
+async def _register_only(email: str) -> None:
+    """
+    Registers a user via a throwaway, independent AsyncClient so the
+    caller's own `client` fixture session/cookies are left untouched.
+    Used for setting up a second user (e.g. an invitee) while staying
+    logged in as the first.
+    """
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://testserver") as ac:
+        await ac.post(
+            "/v1/auth/register",
+            json={"email": email, "password": "testpass123", "full_name": "Invited User"},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -273,3 +290,154 @@ class TestProjectMembers:
         assert "data" in body
         assert "meta" in body
         assert "request_id" in body["meta"]
+
+    # -- Invite member ---------------------------------------------------
+
+    async def test_invite_member_happy_path(self, client: AsyncClient, unique_email: str):
+        email_b = f"invitee_{unique_email}"
+        await _register_only(email_b)
+
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Invite Team"})
+        project_id = create_resp.json()["data"]["id"]
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/members",
+            json={"email": email_b, "role": "editor"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["data"]["role"] == "editor"
+
+        list_resp = await client.get(f"/v1/projects/{project_id}/members")
+        assert len(list_resp.json()["data"]) == 2
+
+    async def test_invite_member_unknown_email_404(self, client: AsyncClient, unique_email: str):
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Invite 404"})
+        project_id = create_resp.json()["data"]["id"]
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/members",
+            json={"email": f"nobody_{unique_email}", "role": "viewer"},
+        )
+        assert resp.status_code == 404
+
+    async def test_invite_member_already_a_member_409(self, client: AsyncClient, unique_email: str):
+        email_b = f"dupe_{unique_email}"
+        await _register_only(email_b)
+
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Invite Dupe"})
+        project_id = create_resp.json()["data"]["id"]
+
+        await client.post(
+            f"/v1/projects/{project_id}/members", json={"email": email_b, "role": "viewer"}
+        )
+        resp = await client.post(
+            f"/v1/projects/{project_id}/members", json={"email": email_b, "role": "viewer"}
+        )
+        assert resp.status_code == 409
+
+    async def test_invite_member_requires_admin(self, client: AsyncClient, unique_email: str):
+        email_owner = unique_email
+        email_viewer = f"viewer_{unique_email}"
+        email_target = f"target_{unique_email}"
+        await _register_only(email_viewer)
+        await _register_only(email_target)
+
+        await _register_and_login(client, email_owner)
+        create_resp = await client.post("/v1/projects", json={"name": "Invite Perms"})
+        project_id = create_resp.json()["data"]["id"]
+        await client.post(
+            f"/v1/projects/{project_id}/members",
+            json={"email": email_viewer, "role": "viewer"},
+        )
+
+        await client.post("/v1/auth/login", json={"email": email_viewer, "password": "testpass123"})
+        resp = await client.post(
+            f"/v1/projects/{project_id}/members",
+            json={"email": email_target, "role": "viewer"},
+        )
+        assert resp.status_code == 403
+
+    # -- Update member role ------------------------------------------------
+
+    async def test_update_member_role_happy_path(self, client: AsyncClient, unique_email: str):
+        email_b = f"promote_{unique_email}"
+        await _register_only(email_b)
+
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Promote Team"})
+        project_id = create_resp.json()["data"]["id"]
+        invite_resp = await client.post(
+            f"/v1/projects/{project_id}/members", json={"email": email_b, "role": "viewer"}
+        )
+        user_id = invite_resp.json()["data"]["user_id"]
+
+        resp = await client.patch(
+            f"/v1/projects/{project_id}/members/{user_id}", json={"role": "editor"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["role"] == "editor"
+
+    async def test_demote_last_admin_409(self, client: AsyncClient, unique_email: str):
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Sole Admin"})
+        project_id = create_resp.json()["data"]["id"]
+
+        members = (await client.get(f"/v1/projects/{project_id}/members")).json()["data"]
+        owner_user_id = members[0]["user_id"]
+
+        resp = await client.patch(
+            f"/v1/projects/{project_id}/members/{owner_user_id}", json={"role": "viewer"}
+        )
+        assert resp.status_code == 409
+
+    # -- Remove member -------------------------------------------------------
+
+    async def test_remove_member_happy_path(self, client: AsyncClient, unique_email: str):
+        email_b = f"removeme_{unique_email}"
+        await _register_only(email_b)
+
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Remove Team"})
+        project_id = create_resp.json()["data"]["id"]
+        invite_resp = await client.post(
+            f"/v1/projects/{project_id}/members", json={"email": email_b, "role": "viewer"}
+        )
+        user_id = invite_resp.json()["data"]["user_id"]
+
+        resp = await client.delete(f"/v1/projects/{project_id}/members/{user_id}")
+        assert resp.status_code == 204
+
+        list_resp = await client.get(f"/v1/projects/{project_id}/members")
+        assert len(list_resp.json()["data"]) == 1
+
+    async def test_remove_owner_409(self, client: AsyncClient, unique_email: str):
+        await _register_and_login(client, unique_email)
+        create_resp = await client.post("/v1/projects", json={"name": "Owner Protect"})
+        project_id = create_resp.json()["data"]["id"]
+
+        members = (await client.get(f"/v1/projects/{project_id}/members")).json()["data"]
+        owner_user_id = members[0]["user_id"]
+
+        resp = await client.delete(f"/v1/projects/{project_id}/members/{owner_user_id}")
+        assert resp.status_code == 409
+
+    async def test_remove_member_requires_admin(self, client: AsyncClient, unique_email: str):
+        email_owner = unique_email
+        email_viewer = f"vwr_{unique_email}"
+        await _register_only(email_viewer)
+
+        await _register_and_login(client, email_owner)
+        create_resp = await client.post("/v1/projects", json={"name": "Remove Perms"})
+        project_id = create_resp.json()["data"]["id"]
+        invite_resp = await client.post(
+            f"/v1/projects/{project_id}/members",
+            json={"email": email_viewer, "role": "viewer"},
+        )
+        viewer_user_id = invite_resp.json()["data"]["user_id"]
+
+        await client.post("/v1/auth/login", json={"email": email_viewer, "password": "testpass123"})
+        resp = await client.delete(f"/v1/projects/{project_id}/members/{viewer_user_id}")
+        assert resp.status_code == 403

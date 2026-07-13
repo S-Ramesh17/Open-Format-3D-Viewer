@@ -1,5 +1,5 @@
 # apps/worker/Dockerfile
-FROM python:3.12-slim AS base
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
@@ -17,8 +17,28 @@ RUN poetry config virtualenvs.create false \
 
 COPY app/ ./app/
 
-# Install gltf-pipeline for GLTF/STEP Draco compression
-RUN npm install -g gltf-pipeline
+RUN npm install -g gltf-pipeline @xeokit/xeokit-convert gltf-validator
+
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    procps \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local /usr/local
+COPY --from=builder /app /app
+
+RUN groupadd -r appuser \
+    && useradd -r -g appuser -d /app -s /usr/sbin/nologin appuser \
+    && mkdir -p /data/openformat \
+    && chown -R appuser:appuser /app /data/openformat
+
+USER appuser
 
 CMD ["celery", "-A", "app.celery_app.celery_app", "worker", \
      "--loglevel=info", \

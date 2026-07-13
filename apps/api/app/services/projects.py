@@ -5,13 +5,15 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import ConflictException, NotFoundException
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
 from app.schemas.projects import (
     ProjectCreate,
+    ProjectMemberInvite,
     ProjectMemberResponse,
+    ProjectMemberRoleUpdate,
     ProjectResponse,
     ProjectUpdate,
 )
@@ -133,6 +135,136 @@ async def list_project_members(
     )
     rows = result.scalars().all()
     return [ProjectMemberResponse.model_validate(r) for r in rows]
+
+
+async def invite_project_member(
+    project_id: uuid.UUID,
+    data: ProjectMemberInvite,
+    db: AsyncSession,
+) -> ProjectMemberResponse:
+    """
+    Add an existing registered user (looked up by email) to a project.
+
+    This adds a user who already has an OpenFormat account — it does not
+    send an email or create an invitation for a not-yet-registered address.
+    Raises NotFoundException if no user with that email exists.
+    Raises ConflictException if the user is already a member of the project.
+    """
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise NotFoundException(f"No user found with email '{data.email}'")
+
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user.id,
+        )
+    )
+    if result.scalar_one_or_none():
+        raise ConflictException("This user is already a member of the project")
+
+    member = ProjectMember(
+        id=uuid.uuid4(),
+        project_id=project_id,
+        user_id=user.id,
+        role=data.role,
+    )
+    db.add(member)
+    await db.commit()
+    await db.refresh(member)
+
+    return ProjectMemberResponse.model_validate(member)
+
+
+async def update_project_member_role(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    data: ProjectMemberRoleUpdate,
+    db: AsyncSession,
+) -> ProjectMemberResponse:
+    """
+    Change a member's role.
+
+    Raises NotFoundException if the user is not a member of the project.
+    Raises ConflictException if this would demote the project's last admin
+    (every project must always retain at least one admin).
+    """
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
+    if not member:
+        raise NotFoundException("This user is not a member of the project")
+
+    if member.role == "admin" and data.role != "admin":
+        await _ensure_not_last_admin(project_id, user_id, db)
+
+    member.role = data.role
+    await db.commit()
+    await db.refresh(member)
+
+    return ProjectMemberResponse.model_validate(member)
+
+
+async def remove_project_member(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+) -> None:
+    """
+    Remove a member from a project.
+
+    Raises NotFoundException if the user is not a member of the project.
+    Raises ConflictException if the user is the project owner (ownership
+    must be transferred or the project deleted — not handled by this
+    endpoint) or the project's last remaining admin.
+    """
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
+    if not member:
+        raise NotFoundException("This user is not a member of the project")
+
+    result = await db.execute(
+        select(Project.owner_id).where(Project.id == project_id)
+    )
+    owner_id = result.scalar_one_or_none()
+    if owner_id == user_id:
+        raise ConflictException("The project owner cannot be removed as a member")
+
+    if member.role == "admin":
+        await _ensure_not_last_admin(project_id, user_id, db)
+
+    await db.delete(member)
+    await db.commit()
+
+
+async def _ensure_not_last_admin(
+    project_id: uuid.UUID,
+    excluding_user_id: uuid.UUID,
+    db: AsyncSession,
+) -> None:
+    """Raises ConflictException if excluding this user leaves zero admins."""
+    result = await db.execute(
+        select(ProjectMember.id).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.role == "admin",
+            ProjectMember.user_id != excluding_user_id,
+        )
+    )
+    if result.first() is None:
+        raise ConflictException(
+            "Cannot remove the project's last admin — "
+            "promote another member to admin first"
+        )
 
 
 async def get_project(

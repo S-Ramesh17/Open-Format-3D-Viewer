@@ -11,14 +11,22 @@ from app.core.request_id import get_request_id
 from app.db.engine import get_db
 from app.models.project_member import ProjectMember
 from app.models.user import User
-from app.schemas.projects import ProjectCreate, ProjectUpdate
+from app.schemas.projects import (
+    ProjectCreate,
+    ProjectMemberInvite,
+    ProjectMemberRoleUpdate,
+    ProjectUpdate,
+)
 from app.services.projects import (
     create_project,
     delete_project,
     get_project,
+    invite_project_member,
     list_project_members,
     list_projects,
+    remove_project_member,
     update_project,
+    update_project_member_role,
 )
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
@@ -70,6 +78,39 @@ async def list_members(
 
     members = await list_project_members(project_id, db)
     return envelope([m.model_dump(mode="json") for m in members])
+
+
+@router.post("/{project_id}/members", status_code=201)
+async def invite_member(
+    project_id: uuid.UUID,
+    data: ProjectMemberInvite,
+    member: ProjectMember = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    new_member = await invite_project_member(project_id, data, db)
+    return envelope(new_member.model_dump(mode="json"), status_code=201)
+
+
+@router.patch("/{project_id}/members/{user_id}")
+async def update_member_role(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    data: ProjectMemberRoleUpdate,
+    member: ProjectMember = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    updated = await update_project_member_role(project_id, user_id, data, db)
+    return envelope(updated.model_dump(mode="json"))
+
+
+@router.delete("/{project_id}/members/{user_id}", status_code=204)
+async def remove_member(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    member: ProjectMember = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await remove_project_member(project_id, user_id, db)
 
 
 @router.patch("/{project_id}")
