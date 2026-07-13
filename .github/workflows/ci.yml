@@ -47,7 +47,7 @@ jobs:
           cd apps/api && poetry install
           cd ../worker && poetry install
       
-       - name: Run API Tests with Coverage Gate
+      - name: Run API Tests with Coverage Gate
         env:
           DATABASE_URL: postgresql+asyncpg://openformat:openformat@localhost:5432/openformat
           REDIS_URL: redis://localhost:6379/0
