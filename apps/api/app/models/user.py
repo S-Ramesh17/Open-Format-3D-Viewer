@@ -19,7 +19,7 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255))
     full_name: Mapped[str | None] = mapped_column(String(255))
     plan: Mapped[str] = mapped_column(
-        Enum("free", "pro", name="plan_enum"), default="free"
+        Enum("free", "pro", "enterprise", name="plan_enum"), default="free"
     )
     provider: Mapped[str | None] = mapped_column(String(50))
     provider_user_id: Mapped[str | None] = mapped_column(String(255))

@@ -131,10 +131,20 @@ async def list_project_members(
     Caller must already be verified as a project member (enforced at router level).
     """
     result = await db.execute(
-        select(ProjectMember).where(ProjectMember.project_id == project_id)
+        select(ProjectMember, User.email, User.full_name)
+        .join(User, User.id == ProjectMember.user_id)
+        .where(ProjectMember.project_id == project_id)
     )
-    rows = result.scalars().all()
-    return [ProjectMemberResponse.model_validate(r) for r in rows]
+    rows = result.all()
+    return [
+        ProjectMemberResponse(
+            user_id=member.user_id,
+            role=member.role,
+            email=email,
+            full_name=full_name,
+        )
+        for member, email, full_name in rows
+    ]
 
 
 async def invite_project_member(
@@ -174,7 +184,12 @@ async def invite_project_member(
     await db.commit()
     await db.refresh(member)
 
-    return ProjectMemberResponse.model_validate(member)
+    return ProjectMemberResponse(
+        user_id=member.user_id,
+        role=member.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
 
 
 async def update_project_member_role(
@@ -207,7 +222,15 @@ async def update_project_member_role(
     await db.commit()
     await db.refresh(member)
 
-    return ProjectMemberResponse.model_validate(member)
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user = user_result.scalar_one()
+
+    return ProjectMemberResponse(
+        user_id=member.user_id,
+        role=member.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
 
 
 async def remove_project_member(

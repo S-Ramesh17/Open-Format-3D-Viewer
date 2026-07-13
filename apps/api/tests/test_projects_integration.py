@@ -14,16 +14,18 @@ pytestmark = pytest.mark.asyncio
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _register_and_login(client: AsyncClient, email: str) -> AsyncClient:
+async def _register_and_login(
+    client: AsyncClient, email: str, full_name: str = "Test User"
+) -> AsyncClient:
     """Register + login a user; returns a client with auth cookies set."""
     await client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123", "full_name": "Test User"},
+        json={"email": email, "password": "testpass123", "full_name": full_name},
     )
     return client
 
 
-async def _register_only(email: str) -> None:
+async def _register_only(email: str, full_name: str = "Invited User") -> None:
     """
     Registers a user via a throwaway, independent AsyncClient so the
     caller's own `client` fixture session/cookies are left untouched.
@@ -36,7 +38,7 @@ async def _register_only(email: str) -> None:
     async with AsyncClient(transport=transport, base_url="https://testserver") as ac:
         await ac.post(
             "/v1/auth/register",
-            json={"email": email, "password": "testpass123", "full_name": "Invited User"},
+            json={"email": email, "password": "testpass123", "full_name": full_name},
         )
 
 
@@ -310,6 +312,42 @@ class TestProjectMembers:
 
         list_resp = await client.get(f"/v1/projects/{project_id}/members")
         assert len(list_resp.json()["data"]) == 2
+
+    async def test_members_include_email_and_full_name(
+        self, client: AsyncClient, unique_email: str
+    ):
+        """
+        Regression test: ProjectMemberResponse must expose email/full_name
+        for every member — invite response, role-update response, and the
+        list endpoint — not just user_id/role. A UI can't render a member
+        list from opaque UUIDs alone.
+        """
+        email_b = f"invitee_{unique_email}"
+        await _register_only(email_b, full_name="Invitee Full Name")
+
+        await _register_and_login(client, unique_email, full_name="Owner Full Name")
+        create_resp = await client.post("/v1/projects", json={"name": "Field Check"})
+        project_id = create_resp.json()["data"]["id"]
+
+        invite_resp = await client.post(
+            f"/v1/projects/{project_id}/members",
+            json={"email": email_b, "role": "viewer"},
+        )
+        invited = invite_resp.json()["data"]
+        assert invited["email"] == email_b
+        assert invited["full_name"] == "Invitee Full Name"
+
+        list_resp = await client.get(f"/v1/projects/{project_id}/members")
+        members_by_email = {m["email"]: m for m in list_resp.json()["data"]}
+        assert members_by_email[unique_email]["full_name"] == "Owner Full Name"
+        assert members_by_email[email_b]["full_name"] == "Invitee Full Name"
+
+        role_resp = await client.patch(
+            f"/v1/projects/{project_id}/members/{invited['user_id']}",
+            json={"role": "editor"},
+        )
+        assert role_resp.json()["data"]["email"] == email_b
+        assert role_resp.json()["data"]["full_name"] == "Invitee Full Name"
 
     async def test_invite_member_unknown_email_404(self, client: AsyncClient, unique_email: str):
         await _register_and_login(client, unique_email)
