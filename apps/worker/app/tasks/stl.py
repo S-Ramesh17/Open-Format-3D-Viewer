@@ -43,6 +43,7 @@ from app.tasks.common import (
     split_binary_chunks,
     update_model_status,
     upload_processed_file,
+    build_cdn_url,
     upsert_model_metadata,
 )
 from app.tasks.error_handler import (
@@ -350,8 +351,7 @@ def process_stl(self: Task, model_id: str) -> dict:
             # ── Update status + publish ────────────────────────────────────
             stage = "finalize"
             update_model_status(engine, model_id, "ready", s3_processed_prefix=processed_prefix)
-            base_cdn = settings.CDN_BASE_URL.rstrip("/")
-            chunk_urls = [f"{base_cdn}/{k}" for k in uploaded_keys]
+            chunk_urls = [build_cdn_url(k) for k in uploaded_keys]
             publish_model_ready(user_id, model_id, chunk_urls)
             dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
             release_task_lock(model_id, "app.tasks.stl.process_stl")

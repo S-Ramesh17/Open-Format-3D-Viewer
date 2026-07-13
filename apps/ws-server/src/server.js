@@ -1,5 +1,5 @@
 /**
- * OpenFormat WebSocket Server — Week 2 Day 1
+ * OpenFormat WebSocket Server
  *
  * Responsibilities:
  *   - Authenticate JWTs from ?token= query param
@@ -10,11 +10,17 @@
  *   - Room-based broadcast for collaborative cursor/annotation events
  */
 
+import { randomUUID } from 'node:crypto';
+
 import Fastify from 'fastify';
 import websocketPlugin from '@fastify/websocket';
 import jwt from 'jsonwebtoken';
 import Redis from 'ioredis';
 import 'dotenv/config';
+
+// Unique per-process id, used to recognize (and skip) our own room
+// broadcasts when they echo back to us via the shared Redis channel.
+const PROCESS_ID = randomUUID();
 
 import {
   connectedClients,
@@ -53,6 +59,46 @@ const redisClient = new Redis(REDIS_URL, {
 
 redisClient.on('error', (err) => {
   console.error('[redis] connection error:', err.message);
+});
+
+// ---------------------------------------------------------------------------
+// Shared, process-wide subscriber for cross-instance room broadcasts.
+// Room state (`rooms` Map, below) is per-pod; without this, CURSOR_MOVE /
+// ANNOTATION_CREATED / ANNOTATION_UPDATED / MODEL_SYNC / join-leave events
+// only reach clients connected to the same ws-server replica. One
+// PSUBSCRIBE per process (not per connection) fans room events out to
+// every replica; each replica then delivers only to its own locally
+// connected room members.
+const ROOM_CHANNEL_PREFIX = 'ws:room:';
+const roomSubscriber = new Redis(REDIS_URL, {
+  lazyConnect: false,
+  enableOfflineQueue: true,
+  retryStrategy: (times) => Math.min(times * 200, 5000),
+});
+roomSubscriber.on('error', (err) => {
+  console.error('[redis] room subscriber error:', err.message);
+});
+roomSubscriber.psubscribe(`${ROOM_CHANNEL_PREFIX}*`, (err) => {
+  if (err) console.error('[redis] room psubscribe failed:', err.message);
+});
+roomSubscriber.on('pmessage', (_pattern, channel, raw) => {
+  let envelope;
+  try {
+    envelope = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (envelope.originProcessId === PROCESS_ID) return; // already delivered locally
+  const modelId = channel.slice(ROOM_CHANNEL_PREFIX.length);
+  const room = rooms.get(modelId);
+  if (!room) return;
+  const payload = JSON.stringify(envelope.message);
+  for (const client of room) {
+    if (client.socket.readyState === 1) {
+      client.socket.send(payload);
+      messagesSent.inc();
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -124,15 +170,30 @@ function send(socket, message) {
  */
 function broadcast(modelId, message, exclude = null) {
   const room = rooms.get(modelId);
-  if (!room) return;
-  const payload = JSON.stringify(message);
-  for (const client of room) {
-    if (client === exclude) continue;
-    if (client.socket.readyState === 1) {
-      client.socket.send(payload);
-      messagesSent.inc();
+  if (room) {
+    const payload = JSON.stringify(message);
+    for (const client of room) {
+      if (client === exclude) continue;
+      if (client.socket.readyState === 1) {
+        client.socket.send(payload);
+        messagesSent.inc();
+      }
     }
   }
+
+  // Fan out to other ws-server replicas so clients connected to a
+  // different pod (but the same model room) also receive this event.
+  // originProcessId lets every replica's subscriber skip its own
+  // broadcasts, since it already delivered them locally above.
+  redisClient
+    .publish(
+      `${ROOM_CHANNEL_PREFIX}${modelId}`,
+      JSON.stringify({ originProcessId: PROCESS_ID, message })
+    )
+    .catch((err) => {
+      redisPublishFailures.inc();
+      fastify.log.warn({ err, modelId }, 'Room broadcast publish failed');
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +217,7 @@ fastify.get('/health', async () => {
 // ---------------------------------------------------------------------------
 // WebSocket handler
 // ---------------------------------------------------------------------------
-fastify.get('/v1/ws', { websocket: true }, (socket, req) => {
+fastify.get('/connect', { websocket: true }, (socket, req) => {
   const token = req.query?.token;
   const userId = verifyToken(token);
 
@@ -233,7 +294,7 @@ connectedClients.inc();
     currentModelId = modelId;
     if (!rooms.has(modelId)) rooms.set(modelId, new Set());
     rooms.get(modelId).add(client);
-    broadcast(modelId, { event: 'user:join', userId }, client);
+    broadcast(modelId, { event: 'USER_JOINED', user: { id: userId } }, client);
     fastify.log.debug({ userId, modelId }, 'Joined room');
   }
 
@@ -241,7 +302,7 @@ connectedClients.inc();
     const room = rooms.get(modelId);
     if (!room) return;
     room.delete(client);
-    broadcast(modelId, { event: 'user:leave', userId }, client);
+    broadcast(modelId, { event: 'USER_LEFT', user_id: userId }, client);
     if (room.size === 0) rooms.delete(modelId);
     if (currentModelId === modelId) currentModelId = null;
     fastify.log.debug({ userId, modelId }, 'Left room');
@@ -304,8 +365,12 @@ connectedClients.inc();
             break;
           }
           client.lastCursorBroadcastAt = now;
-          broadcast(currentModelId, { event: 'CURSOR_MOVE', userId, data: msg.data }, client);
-          roomBroadcasts.labels({ event_type: msg.event }).inc();
+          broadcast(
+            currentModelId,
+            { event: 'CURSOR_MOVED', user_id: userId, position: msg.data?.position },
+            client
+          );
+          roomBroadcasts.labels({ event_type: 'CURSOR_MOVED' }).inc();
         }
         break;
       }

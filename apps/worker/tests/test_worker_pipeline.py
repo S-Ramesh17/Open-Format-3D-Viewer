@@ -415,3 +415,18 @@ class TestWorkerStorage:
 
         assert dest.exists()
         assert dest.read_bytes() == b"ISO-10303-21;"
+
+    def test_build_cdn_url_local_mode_returns_files_route(self):
+        """MODEL_READY.chunk_urls must point at the API's /files/ route in
+        local mode — previously all 5 converters built this URL from
+        CDN_BASE_URL unconditionally, which is empty/placeholder in local
+        dev and broke the client's ability to load a just-processed model."""
+        with patch("app.config.settings.STORAGE_PROVIDER", "local"):
+            from app.tasks.common import build_cdn_url
+            assert build_cdn_url("processed/model-1/chunk_0.xkt") == "/files/processed/model-1/chunk_0.xkt"
+
+    def test_build_cdn_url_s3_mode_uses_cdn_base_url(self):
+        with patch("app.config.settings.STORAGE_PROVIDER", "s3"), \
+             patch("app.config.settings.CDN_BASE_URL", "https://cdn.example.com/"):
+            from app.tasks.common import build_cdn_url
+            assert build_cdn_url("processed/model-1/chunk_0.xkt") == "https://cdn.example.com/processed/model-1/chunk_0.xkt"

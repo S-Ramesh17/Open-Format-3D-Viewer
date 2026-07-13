@@ -60,6 +60,21 @@ def download_raw_file(s3_key: str, dest_path: str) -> None:
     s3.download_file(settings.S3_RAW_BUCKET, s3_key, dest_path)
 
 
+def build_cdn_url(processed_key: str) -> str:
+    """Build the URL a browser client uses to fetch a processed chunk.
+    Must match app/services/storage.py's build_cdn_url on the API side —
+    both need to agree on where a given processed_key is actually
+    reachable from, since this is what's sent in the MODEL_READY
+    websocket payload for the client to start loading immediately."""
+    # TEMP LOCAL STORAGE — API serves processed files via /files/
+    if settings.STORAGE_PROVIDER == "local":
+        return f"/files/{processed_key}"
+    # END TEMP LOCAL STORAGE
+
+    base = settings.CDN_BASE_URL.rstrip("/")
+    return f"{base}/{processed_key}"
+
+
 def upload_processed_file(
     local_path: str,
     s3_key: str,
@@ -254,18 +269,18 @@ def publish_model_failed(user_id: str, model_id: str, error: str) -> None:
 import subprocess  # noqa: E402  (placed after logger setup intentionally)
 def publish_model_progress(user_id: str, model_id: str, percent: int, stage: str = "") -> None:
     """
-    Publish a MODEL_PROGRESS event to the ws-server relay channel.
-    percent: 0–100
+    Publish a MODEL_PROCESSING event to the ws-server relay channel.
+    percent: 0-100 (sent as progress_pct, matching PRD §6.2's payload shape)
     stage: human-readable stage name e.g. "download", "convert", "upload"
     """
     import redis as redis_lib
 
     channel = f"model_events:{user_id}"
     payload = json.dumps({
-        "event": "MODEL_PROGRESS",
+        "event": "MODEL_PROCESSING",
         "data": {
             "model_id": model_id,
-            "percent": percent,
+            "progress_pct": percent,
             "stage": stage,
         },
     })

@@ -1,4 +1,5 @@
 import base64
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -30,6 +31,8 @@ from app.services.storage import (
 )
 
 from app.core.redis import publish_model_event
+
+logger = logging.getLogger(__name__)
 
 EXT_TO_FORMAT = {
     ".ifc": "ifc",
@@ -228,6 +231,29 @@ async def delete_model(model_id: uuid.UUID, db: AsyncSession) -> None:
     model = result.scalar_one_or_none()
     if not model:
         raise NotFoundException("Model not found")
+
+    # Best-effort storage cleanup: a transient S3 error here shouldn't block
+    # the user's explicit delete request (the DB row staying vs. not is the
+    # part the user is actually waiting on) — log loudly instead so an
+    # orphaned object can be found and swept later, same as the worker's
+    # existing cleanup_abandoned_uploads sweeper does for abandoned uploads.
+    try:
+        _storage_svc.delete_raw_object(model.s3_raw_key)
+    except Exception:
+        logger.exception(
+            "Failed to delete raw storage object for model_id=%s (s3_raw_key=%s) — "
+            "orphaned object requires manual cleanup",
+            model_id, model.s3_raw_key,
+        )
+    try:
+        _storage_svc.delete_processed_objects(model.s3_processed_prefix)
+    except Exception:
+        logger.exception(
+            "Failed to delete processed storage objects for model_id=%s (prefix=%s) — "
+            "orphaned objects require manual cleanup",
+            model_id, model.s3_processed_prefix,
+        )
+
     await db.delete(model)
     await db.commit()
 

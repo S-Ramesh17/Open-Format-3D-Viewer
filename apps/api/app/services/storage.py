@@ -255,3 +255,59 @@ def build_cdn_url(processed_key: str) -> str:
 
     base = settings.CDN_BASE_URL.rstrip("/")
     return f"{base}/{processed_key}"
+
+
+def delete_raw_object(storage_key: str) -> None:
+    """Delete a single raw-upload object (or local file). Idempotent —
+    a missing object is not an error, since callers use this for cleanup."""
+    if not storage_key:
+        return
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        local_path = _local_raw_path(storage_key)
+        try:
+            os.remove(local_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise StorageException(f"Failed to delete local raw file: {exc}")
+        return
+    # END TEMP LOCAL STORAGE
+
+    client = _get_s3_client()
+    try:
+        client.delete_object(Bucket=settings.S3_RAW_BUCKET, Key=storage_key)
+    except Exception as exc:
+        raise StorageException(f"Failed to delete raw object '{storage_key}': {exc}")
+
+
+def delete_processed_objects(prefix: str) -> None:
+    """Delete every processed chunk under a model's output prefix
+    (model.s3_processed_prefix). Idempotent — a missing prefix/directory
+    is not an error."""
+    if not prefix:
+        return
+    # TEMP LOCAL STORAGE
+    if settings.STORAGE_PROVIDER == "local":
+        import shutil
+        local_dir = _local_processed_path(prefix)
+        shutil.rmtree(local_dir, ignore_errors=True)
+        return
+    # END TEMP LOCAL STORAGE
+
+    client = _get_s3_client()
+    try:
+        paginator = client.get_paginator("list_objects_v2")
+        keys_to_delete = [
+            {"Key": obj["Key"]}
+            for page in paginator.paginate(Bucket=settings.S3_PROCESSED_BUCKET, Prefix=prefix)
+            for obj in page.get("Contents", [])
+        ]
+        # S3 delete_objects caps at 1000 keys per call
+        for i in range(0, len(keys_to_delete), 1000):
+            batch = keys_to_delete[i : i + 1000]
+            client.delete_objects(
+                Bucket=settings.S3_PROCESSED_BUCKET, Delete={"Objects": batch}
+            )
+    except Exception as exc:
+        raise StorageException(f"Failed to delete processed objects under '{prefix}': {exc}")

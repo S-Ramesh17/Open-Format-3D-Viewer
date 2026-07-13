@@ -271,3 +271,50 @@ class TestDeleteModel:
     async def test_delete_requires_auth(self, client: AsyncClient):
         resp = await client.delete(f"/v1/models/{uuid.uuid4()}")
         assert resp.status_code == 401
+
+    async def test_delete_calls_storage_cleanup_for_raw_and_processed(
+        self, client: AsyncClient, unique_email: str
+    ):
+        """DELETE must remove the underlying storage objects, not just the
+        DB row — previously this endpoint left every raw upload and
+        processed chunk set permanently orphaned in storage."""
+        with patch("app.services.models.generate_presigned_upload_url", return_value="https://s3.example.com/url"):
+            project_id = await _setup_user_and_project(client, unique_email)
+            upload_resp = await client.post(
+                "/v1/models/upload",
+                json={**VALID_UPLOAD_PAYLOAD, "project_id": project_id},
+            )
+            model_id = upload_resp.json()["data"]["model_id"]
+
+        with (
+            patch("app.services.models._storage_svc.delete_raw_object") as mock_delete_raw,
+            patch("app.services.models._storage_svc.delete_processed_objects") as mock_delete_processed,
+        ):
+            resp = await client.delete(f"/v1/models/{model_id}")
+            assert resp.status_code == 204
+            mock_delete_raw.assert_called_once()
+            mock_delete_processed.assert_called_once()
+
+    async def test_delete_succeeds_even_if_storage_cleanup_fails(
+        self, client: AsyncClient, unique_email: str
+    ):
+        """A transient S3 error during cleanup must not block the user's
+        explicit delete request — the DB row should still be removed, with
+        the failure logged for a manual/automated sweep."""
+        with patch("app.services.models.generate_presigned_upload_url", return_value="https://s3.example.com/url"):
+            project_id = await _setup_user_and_project(client, unique_email)
+            upload_resp = await client.post(
+                "/v1/models/upload",
+                json={**VALID_UPLOAD_PAYLOAD, "project_id": project_id},
+            )
+            model_id = upload_resp.json()["data"]["model_id"]
+
+        with patch(
+            "app.services.models._storage_svc.delete_raw_object",
+            side_effect=Exception("S3 unavailable"),
+        ):
+            resp = await client.delete(f"/v1/models/{model_id}")
+            assert resp.status_code == 204
+
+        get_resp = await client.get(f"/v1/models/{model_id}")
+        assert get_resp.status_code == 404

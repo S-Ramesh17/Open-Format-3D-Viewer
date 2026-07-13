@@ -40,6 +40,7 @@ from app.tasks.common import (
     update_model_status,
     upsert_model_metadata,
     upload_processed_file,
+    build_cdn_url,
 )
 from app.tasks.error_handler import (
     assert_file_size,
@@ -290,8 +291,7 @@ def process_gltf(self: Task, model_id: str) -> dict:
             )
 
            # ── 9. Publish Redis event ─────────────────────────────────────
-            base_cdn = settings.CDN_BASE_URL.rstrip("/")
-            chunk_urls = [f"{base_cdn}/{k}" for k in uploaded_keys]
+            chunk_urls = [build_cdn_url(k) for k in uploaded_keys]
             publish_model_ready(user_id, model_id, chunk_urls)
             dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)
             release_task_lock(model_id, "app.tasks.gltf.process_gltf")
