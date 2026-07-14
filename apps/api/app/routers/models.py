@@ -1,21 +1,39 @@
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.responses import envelope
+from app.api.responses import Envelope, envelope
 from app.core.dependencies import get_current_user
 from app.db.engine import get_db
 from app.models.user import User
-from app.schemas.models import ModelUploadRequest, ModelUploadResponse
+from app.schemas.models import (
+    ModelChunksResponse,
+    ModelElementResponse,
+    ModelResponse,
+    ModelTreeResponse,
+    ModelUploadRequest,
+    ModelUploadResponse,
+)
 import app.services.models
 from app.core.profiling import profile
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/models", tags=["models"])
 
 
-@router.post("/upload/local", status_code=200)
+@router.post(
+    "/upload/local",
+    status_code=200,
+    summary="Direct-upload raw bytes (STORAGE_PROVIDER=local only)",
+    responses={
+        200: {"description": "File stored"},
+        404: {"description": "Not available when STORAGE_PROVIDER != local"},
+    },
+)
 async def upload_local_file(
     storage_key: str = Query(..., description="The storage_key returned by POST /upload"),
     file: UploadFile = ...,
@@ -89,6 +107,15 @@ async def upload_local_file(
             detail=f"Failed to save uploaded file: {exc}",
         )
 
+    logger.info(
+        "models.upload_local.stored",
+        extra={
+            "user_id": str(current_user.id),
+            "model_id": str(key_model_id),
+            "size_bytes": len(contents),
+        },
+    )
+
     return envelope(
         {
             "storage_key": storage_key,
@@ -99,7 +126,11 @@ async def upload_local_file(
     )
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="List models in a project",
+    responses={200: {"model": Envelope[list[ModelResponse]]}},
+)
 async def list_all(
     project_id: uuid.UUID = Query(..., description="Filter models by project ID"),
     cursor: str | None = Query(default=None, description="Pagination cursor"),
@@ -107,6 +138,7 @@ async def list_all(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """List models belonging to a project the caller is a member of."""
     # Enforce project membership before listing
     from app.core.authorization import get_project_member
 
@@ -120,19 +152,34 @@ async def list_all(
     )
 
 
-@router.post("/upload", status_code=201)
+@router.post(
+    "/upload",
+    status_code=201,
+    summary="Start a model upload",
+    responses={201: {"model": Envelope[ModelUploadResponse]}},
+)
 @profile("upload_confirm")
 async def upload(
     data: ModelUploadRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """
+    Create a pending model record and return a presigned upload URL
+    (S3 mode) or a local-upload storage_key (local mode). Requires
+    editor+ role on the target project.
+    """
     # Verify project membership AND editor+ role (viewers cannot upload)
     from app.core.authorization import require_role_for_project
 
     await require_role_for_project(data.project_id, "editor", current_user, db)
 
     model_id, upload_result, storage_key = await app.services.models.initiate_upload(data, current_user, db)
+
+    logger.info(
+        "models.upload.started",
+        extra={"user_id": str(current_user.id), "model_id": str(model_id), "project_id": str(data.project_id)},
+    )
 
     # generate_presigned_upload_url returns a dict {"url": str, "fields": dict}
     # in both local and S3 modes. Unpack it here so the response is always flat.
@@ -152,28 +199,46 @@ async def upload(
     )
     return envelope(response.model_dump(mode="json"), status_code=201)
 
-@router.post("/{model_id}/confirm")
+
+@router.post(
+    "/{model_id}/confirm",
+    summary="Confirm an upload and start processing",
+    responses={200: {"model": Envelope[ModelResponse]}},
+)
 @profile("model_confirm")
 async def confirm(
     model_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """
+    Confirm a completed upload — verifies the object exists in storage,
+    triggers the ClamAV scan, and (once clean) dispatches conversion.
+    """
     from app.core.authorization import require_role_for_project
 
     model = await app.services.models.get_model(model_id, db)
     await require_role_for_project(model.project_id, "editor", current_user, db)
 
     response = await app.services.models.confirm_upload(model_id, db)
+    logger.info(
+        "models.upload.completed",
+        extra={"user_id": str(current_user.id), "model_id": str(model_id)},
+    )
     return envelope(response.model_dump(mode="json"))
 
 
-@router.get("/{model_id}")
+@router.get(
+    "/{model_id}",
+    summary="Get a model",
+    responses={200: {"model": Envelope[ModelResponse]}},
+)
 async def get_one(
     model_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """Get a single model's metadata and processing status."""
     model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
@@ -182,12 +247,18 @@ async def get_one(
     return envelope(model.model_dump(mode="json"))
 
 
-@router.delete("/{model_id}", status_code=204)
+@router.delete(
+    "/{model_id}",
+    status_code=204,
+    summary="Delete a model",
+    responses={204: {"description": "Model and its storage objects deleted"}},
+)
 async def delete_one(
     model_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    """Delete a model (DB row, elements, annotations, and storage objects). Requires admin role."""
     model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member, ROLE_HIERARCHY
     from app.core.exceptions import AuthorizationException
@@ -197,9 +268,17 @@ async def delete_one(
         raise AuthorizationException("This action requires 'admin' role.")
 
     await app.services.models.delete_model(model_id, db)
+    logger.info(
+        "models.deleted",
+        extra={"user_id": str(current_user.id), "model_id": str(model_id)},
+    )
 
 
-@router.get("/{model_id}/elements")
+@router.get(
+    "/{model_id}/elements",
+    summary="List a model's elements",
+    responses={200: {"model": Envelope[list[ModelElementResponse]]}},
+)
 async def elements(
     model_id: uuid.UUID,
     cursor: str | None = Query(default=None),
@@ -209,6 +288,7 @@ async def elements(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """List a model's elements, optionally filtered by IFC type or name search."""
     model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
@@ -224,13 +304,18 @@ async def elements(
     )
 
 
-@router.get("/{model_id}/elements/{guid}")
+@router.get(
+    "/{model_id}/elements/{guid}",
+    summary="Get a single element by GUID",
+    responses={200: {"model": Envelope[ModelElementResponse]}},
+)
 async def element_by_guid(
     model_id: uuid.UUID,
     guid: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """Get one element's full properties by its IFC GlobalId."""
     model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
@@ -240,12 +325,17 @@ async def element_by_guid(
     return envelope(element.model_dump(mode="json"))
 
 
-@router.get("/{model_id}/tree")
+@router.get(
+    "/{model_id}/tree",
+    summary="Get a model's spatial tree",
+    responses={200: {"model": Envelope[ModelTreeResponse]}},
+)
 async def tree(
     model_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """Get the spatial containment tree (site/building/storey/element) for a model."""
     model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 
@@ -255,12 +345,17 @@ async def tree(
     return envelope({"model_id": str(model_id), "tree": tree_data})
 
 
-@router.get("/{model_id}/chunks")
+@router.get(
+    "/{model_id}/chunks",
+    summary="Get a model's processed XKT chunk URLs",
+    responses={200: {"model": Envelope[ModelChunksResponse]}},
+)
 async def chunks(
     model_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    """Get the list of chunk URLs a viewer should load for this model."""
     model = await app.services.models.get_model(model_id, db)
     from app.core.authorization import get_project_member
 

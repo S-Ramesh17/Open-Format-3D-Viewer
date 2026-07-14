@@ -54,9 +54,9 @@ def _metrics_app(environ, start_response):
 def start_metrics_server() -> None:
     """
     Start the Prometheus metrics HTTP server in a daemon thread.
-    Safe to call multiple times — only starts once (guarded by module-level flag).
+    Safe to call multiple times — only starts once (guarded by a
+    function-attribute flag: start_metrics_server._started).
     """
-    global _started
     if getattr(start_metrics_server, "_started", False):
         return
     start_metrics_server._started = True

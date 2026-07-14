@@ -42,7 +42,11 @@ class WorkerSettings(BaseSettings):
     CLAMD_PORT: int = 3310
     CLAMD_TIMEOUT: int = 60
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 settings = WorkerSettings()
