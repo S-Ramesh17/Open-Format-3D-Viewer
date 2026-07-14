@@ -21,7 +21,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --save 60 1 --loglevel warning
+    command: redis-server --save 60 1 --loglevel notice
     volumes:
       - redis_data:/data
     ports:

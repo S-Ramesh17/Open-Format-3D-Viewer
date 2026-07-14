@@ -26,6 +26,7 @@ class WorkerSettings(BaseSettings):
 
     # Prometheus /metrics HTTP server port (multiprocess-aggregated)
     WORKER_METRICS_PORT: int = 9090
+    WS_METRICS_PORT: int = 9091
 
     # XKT conversion: path to @xeokit/xeokit-convert CLI or node script
     XEOKIT_CONVERT_BIN: str = "xeokit-convert"

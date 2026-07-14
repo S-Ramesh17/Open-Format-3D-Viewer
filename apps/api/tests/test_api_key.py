@@ -1,7 +1,5 @@
 import secrets
 
-import pytest
-
 from app.services.api_key import _generate_raw_key, _hash_key, API_KEY_PREFIX
 
 

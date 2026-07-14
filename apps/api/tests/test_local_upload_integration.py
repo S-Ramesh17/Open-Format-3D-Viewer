@@ -38,7 +38,7 @@ class TestLocalUploadEndpoint:
     async def test_returns_404_when_not_local_mode(
         self, client: AsyncClient, unique_email: str, tmp_path
     ):
-        project_id = await _setup_user_and_project(client, unique_email)
+        await _setup_user_and_project(client, unique_email)
         with patch("app.config.settings.STORAGE_PROVIDER", "s3"):
             resp = await client.post(
                 "/v1/models/upload/local?storage_key=a/b/c.ifc",

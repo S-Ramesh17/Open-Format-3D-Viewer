@@ -249,7 +249,7 @@ class TestUpdateAnnotation:
             json={"email": unique_email, "password": "testpass123"},
         )
         # Need to make a project so the auth middleware passes
-        proj_resp = await client.post("/v1/projects", json={"name": "X"})
+        await client.post("/v1/projects", json={"name": "X"})
         resp = await client.patch(
             f"/v1/annotations/{uuid.uuid4()}",
             json={"title": "X"},

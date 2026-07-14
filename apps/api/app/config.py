@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     SECRET_KEY: str = Field(validation_alias="JWT_SECRET")
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+    
+    WORKER_METRICS_PORT: int = Field(
+    default=9090,
+    validation_alias="WORKER_METRICS_PORT")
+
+    WS_METRICS_PORT: int = Field(
+    default=9091,
+    validation_alias="WS_METRICS_PORT")
 
     @field_validator("SECRET_KEY")
     @classmethod
@@ -104,7 +112,12 @@ class Settings(BaseSettings):
     def allowed_origins_list(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+    "env_file": ".env",
+    "env_file_encoding": "utf-8",
+    "case_sensitive": False,
+    "extra": "ignore",
+}
 
 
 settings = Settings()

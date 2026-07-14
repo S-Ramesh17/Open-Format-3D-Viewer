@@ -2,7 +2,6 @@
 Tests for PRD-required model fields: name, element_count, bounds_min_xyz, bounds_max_xyz.
 """
 
-import uuid
 from unittest.mock import patch
 
 import pytest

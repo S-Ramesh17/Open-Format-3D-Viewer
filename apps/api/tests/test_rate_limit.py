@@ -6,7 +6,7 @@ Covers: free-tier limit enforcement, rate limit headers, exempt paths,
 """
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient

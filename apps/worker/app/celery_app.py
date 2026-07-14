@@ -1,12 +1,22 @@
 import importlib
 import os
 from celery import Celery
-from celery.signals import worker_process_init, worker_process_shutdown
+from celery.signals import worker_process_init, worker_process_shutdown, celeryd_after_setup
 
 from app.config import settings
 from app.sentry import init_worker_sentry
 
 init_worker_sentry()
+
+
+@celeryd_after_setup.connect
+def _start_worker_metrics_server(sender, instance, **kwargs):
+    """
+    Starts the Prometheus metrics HTTP server persistently in the worker background
+    once the worker daemon setup is complete.
+    """
+    from app.tasks.metrics_server import start_metrics_server
+    start_metrics_server()
 
 
 @worker_process_init.connect

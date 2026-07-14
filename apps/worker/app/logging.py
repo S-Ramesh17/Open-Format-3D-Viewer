@@ -11,7 +11,7 @@ import logging
 import sys
 import traceback
 from datetime import datetime, timezone
-
+from celery.signals import worker_ready
 
 class _WorkerJSONFormatter(logging.Formatter):
     """
@@ -66,7 +66,7 @@ def configure_worker_logging(environment: str = "development") -> None:
     logging.getLogger("boto3").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
-from celery.signals import worker_ready
+
 
 @worker_ready.connect
 def _start_metrics_server(**kwargs):
