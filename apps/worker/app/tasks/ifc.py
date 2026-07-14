@@ -291,21 +291,12 @@ def _compute_bounds(ifc_file) -> tuple[list[float] | None, list[float] | None]:
 # ---------------------------------------------------------------------------
 
 def _convert_to_xkt(ifc_path: str, output_dir: str) -> list[str]:
-    """
-    Call @xeokit/xeokit-convert (Node.js) to produce XKT files in output_dir.
-    Returns list of produced .xkt file paths.
-
-    The convert CLI is expected to be available as the binary named in
-    settings.XEOKIT_CONVERT_BIN, or as a node script at a well-known path.
-    Falls back gracefully if unavailable so the rest of the pipeline still runs.
-    """
     xkt_out = os.path.join(output_dir, "model.xkt")
-
-    # Determine how to invoke the converter
     convert_bin = settings.XEOKIT_CONVERT_BIN
-    cmd: list[str] = []
-
-    if convert_bin.endswith(".js"):
+    
+    # Force invocation via 'node' if the binary is the JS script.
+    # If the user has a custom binary, we treat it as an executable.
+    if convert_bin.endswith(".js") or "convert2xkt.js" in convert_bin:
         cmd = ["node", convert_bin, "-s", ifc_path, "-o", xkt_out]
     else:
         cmd = [convert_bin, "-s", ifc_path, "-o", xkt_out]
@@ -313,33 +304,32 @@ def _convert_to_xkt(ifc_path: str, output_dir: str) -> list[str]:
     logger.info("Running XKT conversion: %s", " ".join(cmd))
 
     try:
+        # Use shell=False (default) for security; pass cmd list directly
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=600,
+            check=False # We handle returncode manually below
         )
+        
         if result.returncode != 0:
             logger.error("xeokit-convert stderr: %s", result.stderr)
             raise RuntimeError(
                 f"xeokit-convert exited with code {result.returncode}: {result.stderr[:500]}"
             )
+            
         logger.info("xeokit-convert stdout: %s", result.stdout[:300])
-    except FileNotFoundError:
-        logger.warning(
-            "xeokit-convert binary '%s' not found — XKT output skipped. "
-            "Install @xeokit/xeokit-convert or set XEOKIT_CONVERT_BIN.",
-            convert_bin,
-        )
-        return []
+        
+    except FileNotFoundError as e:
+        logger.error("Binary not found: %s. Check XEOKIT_CONVERT_BIN path.", convert_bin)
+        raise e
     except subprocess.TimeoutExpired:
         raise RuntimeError("xeokit-convert timed out after 600s")
 
-    # Collect all .xkt files produced (converter may produce one or split into chunks)
     xkt_files = sorted(Path(output_dir).glob("*.xkt"))
     logger.info("XKT conversion produced %d file(s)", len(xkt_files))
     return [str(p) for p in xkt_files]
-
 
 def _split_xkt_chunks(xkt_files: list[str], output_dir: str) -> list[str]:
     """

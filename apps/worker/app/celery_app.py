@@ -1,15 +1,38 @@
+# app/celery_app.py
+from celery import Celery
+from app.config import settings
 import importlib
 import os
-from celery import Celery
+
 from celery.signals import worker_process_init, worker_process_shutdown, celeryd_after_setup
-
+# apps/worker/app/celery_app.py
+from celery import Celery
 from app.config import settings
-from app.sentry import init_worker_sentry
 
-init_worker_sentry()
+celery_app = Celery("openformat_worker", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
 
-
-@celeryd_after_setup.connect
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    include=[
+        "app.tasks.ifc",
+        "app.tasks.mesh",
+        "app.tasks.step",
+        "app.tasks.gltf",
+        "app.tasks.obj",
+        "app.tasks.stl",
+        "app.tasks.bcf",
+        "app.tasks.scan",
+        "app.tasks.webhook",
+        "app.tasks.queue_collector",
+        "app.tasks.common",
+        "app.tasks.maintainance" 
+    ]
+)
+# ... rest of your config (metrics, logging, etc.) ...
+# ... init_worker_sentry and other configurations ...
 def _start_worker_metrics_server(sender, instance, **kwargs):
     """
     Starts the Prometheus metrics HTTP server persistently in the worker background

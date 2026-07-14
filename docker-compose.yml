@@ -90,6 +90,7 @@ services:
       LOCAL_STORAGE_PATH: /data/openformat
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
       CLAMD_HOST: clamav
+      XEOKIT_CONVERT_BIN: /usr/local/lib/node_modules/@xeokit/xeokit-convert/convert2xkt.js
     tmpfs:
       - /tmp/prometheus_multiproc
     ports:

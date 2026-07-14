@@ -269,7 +269,7 @@ def scan_file(self, model_id: str, s3_key: str) -> dict:
         return {"model_id": model_id, "status": "skipped", "reason": "model_not_found"}
 
     user_id = str(model["uploaded_by"])
-    file_format = model.get("file_format")
+    file_format = model.get("format")
 
     try:
         with tempfile.TemporaryDirectory(prefix="clamd_"):

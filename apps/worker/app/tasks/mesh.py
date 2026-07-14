@@ -52,7 +52,10 @@ def generate_chunks(self, model_id: str) -> dict:
         logger.error("[mesh] Model %s not found in DB — cannot route", model_id)
         return {"error": "model_not_found", "model_id": model_id}
 
-    file_format = (model.get("file_format") or "").lower()
+    # DB column is "format" (renamed from "file_format" by migration
+    # c7e1f4a2b9d3 to match PRD §3.1); get_model_row()'s SELECT/dict use
+    # "format".
+    file_format = (model.get("format") or "").lower()
     task_name = _FORMAT_TO_TASK.get(file_format)
 
     if task_name is None:
