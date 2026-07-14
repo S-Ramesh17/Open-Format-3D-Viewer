@@ -35,7 +35,7 @@ class WorkerSettings(BaseSettings):
 
      # GLTF/GLB pipeline tools
     GLTF_PIPELINE_BIN: str = "gltf-pipeline"   # npm install -g gltf-pipeline
-    GLTF_VALIDATOR_BIN: str = "gltf-validator"  # npm install -g gltf-validator
+    GLTF_VALIDATOR_BIN: str = "gltf-validator"  # native CLI binary from KhronosGroup/glTF-Validator releases — see apps/worker/Dockerfile
 
     # ClamAV (TCP socket via clamd)
     CLAMD_HOST: str = "localhost"

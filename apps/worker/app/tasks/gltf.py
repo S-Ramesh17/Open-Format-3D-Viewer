@@ -73,7 +73,8 @@ def _validate_gltf(file_path: str) -> dict:
     except FileNotFoundError:
         logger.warning(
             "[GLTF] gltf-validator not found ('%s') — skipping validation. "
-            "Install: npm install -g gltf-validator",
+            "See apps/worker/Dockerfile for the correct install (native CLI "
+            "binary, NOT the npm 'gltf-validator' library package).",
             settings.GLTF_VALIDATOR_BIN,
         )
         return {}

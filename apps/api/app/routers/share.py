@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,13 +95,13 @@ async def resolve_share_link(
     "/{link_id}",
     status_code=204,
     summary="Revoke a share link",
-    responses={204: {"description": "Share link revoked"}},
+    response_model=None,
 )
 async def revoke_share_link(
     link_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     """Revoke a share link. Only the link's creator may revoke it."""
     await share_svc.revoke_share_link(link_id, current_user.id, db)
     logger.info(
@@ -109,6 +109,7 @@ async def revoke_share_link(
         extra={"user_id": str(current_user.id), "share_link_id": str(link_id)},
     )
 
+    return Response(status_code=204)
 
 @router.get(
     "/model/{model_id}",

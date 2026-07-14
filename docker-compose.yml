@@ -39,7 +39,7 @@ services:
     restart: unless-stopped
     env_file:
       - path: apps/api/.env
-        required: false
+        required: true
     environment:
       DATABASE_URL: postgresql+asyncpg://openformat:openformat@postgres:5432/openformat
       REDIS_URL: redis://redis:6379/0
@@ -151,7 +151,7 @@ services:
     restart: unless-stopped
     env_file:
       - path: apps/ws-server/.env
-        required: false
+        required: true
     environment:
       REDIS_URL: redis://redis:6379/0
     ports:

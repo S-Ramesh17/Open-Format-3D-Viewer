@@ -167,6 +167,25 @@ class TestLogout:
         resp = await client.get("/v1/auth/me")
         assert resp.status_code == 401
 
+    async def test_refresh_fails_after_logout(self, client: AsyncClient, unique_email: str):
+        """
+        logout_user() deletes the refresh token from Redis. Confirm that
+        actually holds — a refresh token captured before logout must not
+        still mint new access tokens afterward, or logout would be
+        cosmetic (clears cookies client-side) without real server-side
+        revocation.
+        """
+        reg = await client.post(
+            "/v1/auth/register",
+            json={"email": unique_email, "password": "testpass123"},
+        )
+        refresh_token = reg.json()["data"]["refresh_token"]
+
+        await client.post("/v1/auth/logout")
+
+        resp = await client.post("/v1/auth/refresh", json={"refresh_token": refresh_token})
+        assert resp.status_code == 401
+
 
 class TestMe:
     async def test_me_returns_current_user(self, client: AsyncClient, unique_email: str):

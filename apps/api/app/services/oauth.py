@@ -49,10 +49,14 @@ async def handle_google_callback(
     try:
         token = await oauth.google.authorize_access_token(request)
     except OAuthError as exc:
-        logger.error("Google OAuth token exchange failed: %s", exc)
-        raise OAuthCallbackError(f"OAuth token exchange failed: {exc}")
+        logger.error(
+            "Google OAuth token exchange failed: %s: %s",
+            type(exc).__name__,
+            str(exc)[:200],
+        )
+        raise OAuthCallbackError("OAuth token exchange failed")
     except Exception as exc:
-        logger.error("Unexpected error during Google OAuth: %s", exc)
+        logger.error("Unexpected error during Google OAuth: %s: %s", type(exc).__name__, str(exc)[:200])
         raise OAuthCallbackError("OAuth failed unexpectedly")
 
     user_info = token.get("userinfo")

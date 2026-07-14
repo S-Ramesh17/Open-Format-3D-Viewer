@@ -41,7 +41,7 @@ def _shannon_entropy_bits_per_char(value: str) -> float:
 
 class Settings(BaseSettings):
     DATABASE_URL: str
-    SECRET_KEY: str = Field(validation_alias="JWT_SECRET")
+    SECRET_KEY: str
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"
     
     WORKER_METRICS_PORT: int = Field(
@@ -170,8 +170,8 @@ class Settings(BaseSettings):
     model_config = {
     "env_file": ".env",
     "env_file_encoding": "utf-8",
-    "case_sensitive": False,
     "extra": "ignore",
+    "populate_by_name": True,
 }
 
 
