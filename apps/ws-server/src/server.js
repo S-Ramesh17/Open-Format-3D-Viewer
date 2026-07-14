@@ -217,7 +217,7 @@ fastify.get('/health', async () => {
 // ---------------------------------------------------------------------------
 // WebSocket handler
 // ---------------------------------------------------------------------------
-fastify.get('/connect', { websocket: true }, (socket, req) => {
+fastify.get('/connect', { websocket: true }, async (socket, req) => {
   const token = req.query?.token;
   const userId = verifyToken(token);
 
@@ -238,21 +238,20 @@ fastify.get('/connect', { websocket: true }, (socket, req) => {
     pongTimer: null,
     lastCursorBroadcastAt: 0,
   };
-// Track reconnects
-if (userConnections.has(userId)) {
-  reconnections.inc();
-}
-connectedClients.inc();
-
-  fastify.log.info({ userId, initialModelId }, 'WebSocket connected');
-
-  // ── Track user connections ────────────────────────────────────────────────
-  if (!userConnections.has(userId)) userConnections.set(userId, new Set());
-  userConnections.get(userId).add(client);
 
   // ── Dedicated Redis subscriber for this connection ────────────────────────
   // Each connection needs its OWN subscriber client — ioredis subscriber mode
   // is exclusive (can only call subscribe/unsubscribe, not regular commands).
+  //
+  // RACE CONDITION FIX: this subscriber is a brand-new Redis connection
+  // (fresh TCP handshake), which is measurably slower than the WS upgrade
+  // completing on the client side. Previously the client was registered in
+  // userConnections and rooms immediately, while subscribe() ran
+  // fire-and-forget in the background — a MODEL_READY/MODEL_PROCESSING
+  // event published in that window was permanently lost (Redis pub/sub
+  // does not buffer/replay). Everything that makes this connection
+  // "active" (connection map, room join, heartbeat, client message
+  // handling) now happens only after subscription is confirmed.
   const subscriber = new Redis(REDIS_URL, {
     lazyConnect: false,
     enableOfflineQueue: true,
@@ -261,14 +260,9 @@ connectedClients.inc();
 
   const redisChannel = `model_events:${userId}`;
 
-  subscriber.subscribe(redisChannel, (err) => {
-    if (err) {
-      fastify.log.error({ err, redisChannel }, 'Redis subscribe failed');
-    } else {
-      fastify.log.debug({ redisChannel }, 'Subscribed to Redis channel');
-    }
-  });
-
+  // Attach the message/error listeners BEFORE subscribing (standard ioredis
+  // pattern) so there's no window where a delivered message could arrive
+  // with no listener registered to receive it.
   subscriber.on('message', (channel, message) => {
     redisEventsReceived.inc();
     if (channel !== redisChannel) return;
@@ -284,6 +278,34 @@ connectedClients.inc();
     redisPublishFailures.inc();
     fastify.log.warn({ err, userId }, 'Subscriber Redis error');
   });
+
+  try {
+    await subscriber.subscribe(redisChannel);
+  } catch (err) {
+    fastify.log.error(
+      { err, userId, redisChannel },
+      'Redis subscribe failed during WebSocket connect — closing connection to avoid a client that appears connected but cannot receive model events'
+    );
+    // No orphan subscriber: this connection was never registered anywhere
+    // (not in userConnections, no room), so there is nothing else to clean
+    // up besides the subscriber itself.
+    await subscriber.quit().catch(() => {});
+    socket.close(1011, 'Redis subscription failed');
+    return;
+  }
+
+  fastify.log.debug({ redisChannel }, 'Subscribed to Redis channel');
+
+  // ── Subscription confirmed — connection is now considered active ─────────
+  if (userConnections.has(userId)) {
+    reconnections.inc();
+  }
+  connectedClients.inc();
+
+  fastify.log.info({ userId, initialModelId }, 'WebSocket connected');
+
+  if (!userConnections.has(userId)) userConnections.set(userId, new Set());
+  userConnections.get(userId).add(client);
 
   // ── Room helpers ──────────────────────────────────────────────────────────
   let currentModelId = null;
