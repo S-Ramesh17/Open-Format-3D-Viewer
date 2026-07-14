@@ -2,37 +2,14 @@ import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
-
-
-from pydantic import BaseModel, Field, field_validator
-
-
-class AnnotationPosition(BaseModel):
-    x: float
-    y: float
-    z: float
-    normal_x: float
-    normal_y: float
-    normal_z: float
-
-
 class AnnotationCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=500)
-    body: str | None = Field(default=None, max_length=5000)
-    position: AnnotationPosition = Field(..., description="3D position: x, y, z, normal_x/y/z")
-
-    @field_validator("title")
-    @classmethod
-    def title_strip(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Title cannot be blank")
-        return v
+    message: str | None = Field(default=None, max_length=5000)
+    position_xyz: list[float] = Field(..., min_length=3, max_length=3)
+    normal_xyz: list[float] = Field(..., min_length=3, max_length=3)
 
 
 class AnnotationUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=500)
-    body: str | None = Field(default=None, max_length=5000)
+    message: str | None = Field(default=None, max_length=5000)
     status: str | None = Field(default=None)
 
     @field_validator("status")
@@ -46,10 +23,11 @@ class AnnotationUpdate(BaseModel):
 class AnnotationResponse(BaseModel):
     id: uuid.UUID
     model_id: uuid.UUID
-    created_by: uuid.UUID
-    title: str
-    body: str | None
-    position: AnnotationPosition | None
+    author_id: uuid.UUID
+    message: str | None
+    position_xyz: list[float] | None
+    normal_xyz: list[float] | None
+    bcf_guid: str
     status: str
     created_at: datetime
     updated_at: datetime

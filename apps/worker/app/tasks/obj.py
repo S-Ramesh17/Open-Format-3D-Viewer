@@ -206,7 +206,7 @@ def process_obj(self: Task, model_id: str) -> dict:
         return {"error": "model_not_found", "model_id": model_id}
 
     user_id = str(model["uploaded_by"])
-    s3_raw_key = model["s3_raw_key"]
+    s3_raw_key = model["raw_s3_key"]
 
     if not s3_raw_key:
         update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
@@ -288,7 +288,7 @@ def process_obj(self: Task, model_id: str) -> dict:
 
             # ── Update status + publish ────────────────────────────────────
             stage = "finalize"
-            update_model_status(engine, model_id, "ready", s3_processed_prefix=processed_prefix)
+            update_model_status(engine, model_id, "ready", processed_s3_prefix=processed_prefix)
             chunk_urls = [build_cdn_url(k) for k in uploaded_keys]
             publish_model_ready(user_id, model_id, chunk_urls)
             dispatch_webhook_event(engine, "model.ready", {"model_id": model_id}, user_id)

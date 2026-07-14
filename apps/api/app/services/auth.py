@@ -11,8 +11,8 @@ from app.core.exceptions import (
     NotFoundException,
 )
 from app.core.redis import (
+    consume_refresh_token,
     delete_refresh_token,
-    get_refresh_token_user,
     store_refresh_token,
 )
 from app.core.security import (
@@ -80,11 +80,11 @@ async def refresh_access_token(
     if not user_id:
         raise AuthenticationException("Invalid refresh token")
 
-    stored_user_id = await get_refresh_token_user(refresh_token)
+    # Atomically GET and DELETE the token to prevent concurrent replay attacks
+    stored_user_id = await consume_refresh_token(refresh_token)
     if not stored_user_id or stored_user_id != user_id:
         raise AuthenticationException("Refresh token revoked or expired")
 
-    await delete_refresh_token(refresh_token)
     tokens = await _issue_tokens(user_id)
     user = await get_user_by_id(user_id, db)
     return tokens, user

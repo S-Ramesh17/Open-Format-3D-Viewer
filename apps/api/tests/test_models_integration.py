@@ -368,9 +368,9 @@ async def chunks_test_data(db_session):
         uploaded_by=owner.id,
         name="Pending Model",
         original_filename="pending.ifc",
-        file_format="ifc",
+        format="ifc",
         file_size_bytes=1024,
-        s3_raw_key="raw/pending.ifc",
+        raw_s3_key="raw/pending.ifc",
         status="pending",
     )
     db_session.add(pending_model)
@@ -381,10 +381,10 @@ async def chunks_test_data(db_session):
         uploaded_by=owner.id,
         name="Ready Model",
         original_filename="ready.ifc",
-        file_format="ifc",
+        format="ifc",
         file_size_bytes=1024,
-        s3_raw_key="raw/ready.ifc",
-        s3_processed_prefix="processed/ready/",
+        raw_s3_key="raw/ready.ifc",
+        processed_s3_prefix="processed/ready/",
         status="ready",
     )
     db_session.add(ready_model)

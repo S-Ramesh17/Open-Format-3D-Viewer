@@ -211,7 +211,7 @@ def process_gltf(self: Task, model_id: str) -> dict:
         return {"error": "model_not_found", "model_id": model_id}
 
     user_id = str(model["uploaded_by"])
-    s3_raw_key = model["s3_raw_key"]
+    s3_raw_key = model["raw_s3_key"]
 
     if not s3_raw_key:
         update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
@@ -288,7 +288,7 @@ def process_gltf(self: Task, model_id: str) -> dict:
                 engine,
                 model_id,
                 "ready",
-                s3_processed_prefix=processed_prefix,
+                processed_s3_prefix=processed_prefix,
             )
 
            # ── 9. Publish Redis event ─────────────────────────────────────

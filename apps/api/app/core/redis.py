@@ -48,6 +48,12 @@ async def get_refresh_token_user(token: str) -> str | None:
     return await redis.get(key)
 
 
+async def consume_refresh_token(token: str) -> str | None:
+    """Atomically get and delete a refresh token to prevent race conditions."""
+    redis = await get_redis()
+    key = f"{REFRESH_TOKEN_PREFIX}{token}"
+    return await redis.execute_command("GETDEL", key)
+
 async def delete_refresh_token(token: str) -> None:
     """Delete a refresh token. Called on logout."""
     redis = await get_redis()

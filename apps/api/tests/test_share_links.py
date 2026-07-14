@@ -71,9 +71,9 @@ async def share_test_data(db_session: AsyncSession):
         uploaded_by=owner.id,
         name="Test Model",
         original_filename="test.ifc",
-        file_format="ifc",
+        format="ifc",
         file_size_bytes=1024,
-        s3_raw_key="raw/key.ifc",
+        raw_s3_key="raw/key.ifc",
         status="ready",
     )
     db_session.add(model)

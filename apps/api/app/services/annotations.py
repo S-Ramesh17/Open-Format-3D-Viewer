@@ -45,10 +45,11 @@ async def create_annotation(
     annotation = Annotation(
         id=uuid.uuid4(),
         model_id=model_id,
-        created_by=user_id,
-        title=sanitize_text(data.title),
-        body=sanitize_text(data.body) if data.body else None,
-        position=data.position.model_dump(),
+        author_id=user_id,
+        message=sanitize_text(data.message) if data.message else None,
+        position_xyz=data.position_xyz,
+        normal_xyz=data.normal_xyz,
+        bcf_guid=str(uuid.uuid4()),
         status="open",
     )
     db.add(annotation)
@@ -132,10 +133,8 @@ async def update_annotation(
 ) -> AnnotationResponse:
     annotation = await get_annotation(annotation_id, db)
 
-    if data.title is not None:
-        annotation.title = sanitize_text(data.title)
-    if data.body is not None:
-        annotation.body = sanitize_text(data.body)
+    if data.message is not None:
+        annotation.message = sanitize_text(data.message)
     if data.status is not None:
         annotation.status = data.status
 
@@ -144,7 +143,7 @@ async def update_annotation(
     await db.refresh(annotation)
 
     await publish_model_event(
-        str(annotation.created_by),
+        str(annotation.author_id),
         "ANNOTATION_UPDATED",
         {"annotation_id": str(annotation.id), "model_id": str(annotation.model_id), "action": "updated", "status": annotation.status},
     )

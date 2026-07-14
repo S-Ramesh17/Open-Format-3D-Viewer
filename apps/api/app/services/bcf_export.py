@@ -49,7 +49,7 @@ async def export_bcf(model_id: uuid.UUID, db: AsyncSession) -> bytes:
         zf.writestr("bcf.version", '<?xml version="1.0"?>\n<Version VersionId="2.1"/>')
 
         for annotation in annotations:
-            topic_guid = str(annotation.id)
+            topic_guid = annotation.bcf_guid
             comments = comments_by_annotation[annotation.id]
 
             markup_xml = _build_markup_xml(annotation, comments)
@@ -63,16 +63,19 @@ def _build_markup_xml(annotation: Annotation, comments: list[AnnotationComment])
     root = Element("Markup")
 
     topic = SubElement(root, "Topic", {
-        "Guid": str(annotation.id),
+        "Guid": annotation.bcf_guid,
         "TopicType": "Issue",
         "TopicStatus": "Closed" if annotation.status == "resolved" else "Open",
     })
+    
     title_el = SubElement(topic, "Title")
-    title_el.text = annotation.title
+    # BCF Requires Title: Truncate message for the title element
+    title_text = annotation.message or "Annotation"
+    title_el.text = title_text[:50] + "..." if len(title_text) > 50 else title_text
 
-    if annotation.body:
+    if annotation.message:
         desc_el = SubElement(topic, "Description")
-        desc_el.text = annotation.body
+        desc_el.text = annotation.message
 
     creation_date = SubElement(topic, "CreationDate")
     creation_date.text = annotation.created_at.isoformat()
@@ -83,7 +86,7 @@ def _build_markup_xml(annotation: Annotation, comments: list[AnnotationComment])
         date_el.text = comment.created_at.isoformat()
         comment_text_el = SubElement(comment_el, "Comment")
         comment_text_el.text = comment.body
-        SubElement(comment_el, "Topic", {"Guid": str(annotation.id)})
+        SubElement(comment_el, "Topic", {"Guid": annotation.bcf_guid})
 
     xml_bytes = tostring(root, encoding="utf-8", xml_declaration=True)
     return xml_bytes.decode("utf-8")

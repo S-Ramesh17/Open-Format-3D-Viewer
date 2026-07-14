@@ -5,6 +5,7 @@ Covers: register, login, logout, refresh, /me, API key CRUD
 Uses the actual response envelope: {"data": {"user": {...}, "access_token": "...", ...}, "meta": {...}}
 """
 import pytest
+import asyncio
 from httpx import AsyncClient
 
 pytestmark = pytest.mark.asyncio
@@ -288,3 +289,30 @@ class TestApiKeys:
     async def test_create_key_requires_auth(self, client: AsyncClient):
         resp = await client.post("/v1/auth/keys", json={"name": "test"})
         assert resp.status_code == 401
+
+class TestRefreshTokenConcurrency:
+    async def test_concurrent_refresh_only_one_succeeds(self, client: AsyncClient, unique_email: str):
+        """
+        Regression test: Ensure that if multiple identical refresh requests are 
+        fired simultaneously, only ONE succeeds and the rest get HTTP 401.
+        """
+        # 1. Register a user to get initial tokens
+        reg_resp = await client.post(
+            "/v1/auth/register",
+            json={"email": unique_email, "password": "securepassword123", "name": "Concurrency Tester"}
+        )
+        assert reg_resp.status_code == 201
+        
+        refresh_token = reg_resp.json()["data"]["refresh_token"]
+        
+        # 2. Fire 5 concurrent requests using the exact same refresh token
+        reqs = [
+            client.post("/v1/auth/refresh", json={"refresh_token": refresh_token})
+            for _ in range(5)
+        ]
+        responses = await asyncio.gather(*reqs)
+        
+        # 3. Assert exact outcomes: 1 success, 4 unauthorized
+        status_codes = [resp.status_code for resp in responses]
+        assert status_codes.count(200) == 1, f"Expected exactly 1 success, got {status_codes.count(200)}."
+        assert status_codes.count(401) == 4, f"Expected exactly 4 failures, got {status_codes.count(401)}."

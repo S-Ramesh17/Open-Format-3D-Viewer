@@ -17,12 +17,13 @@ class Annotation(Base):
     model_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("models.id", ondelete="CASCADE"), nullable=False
     )
-    created_by: Mapped[uuid.UUID] = mapped_column(
+    author_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id"), nullable=False
     )
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    body: Mapped[str | None] = mapped_column(Text)
-    position: Mapped[dict | None] = mapped_column(JSONB)
+    message: Mapped[str | None] = mapped_column(Text)
+    position_xyz: Mapped[list | None] = mapped_column(JSONB)
+    normal_xyz: Mapped[list | None] = mapped_column(JSONB)
+    bcf_guid: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(
         Enum("open", "in_review", "resolved", name="annotation_status_enum"),
         default="open",
@@ -39,7 +40,7 @@ class Annotation(Base):
 
     __table_args__ = (
         Index("ix_annotations_model_id", "model_id"),
-        Index("ix_annotations_created_by", "created_by"),
+        Index("ix_annotations_author_id", "author_id"),
         Index("ix_annotations_model_status", "model_id", "status"),
         Index(
             "ix_annotations_model_created_at",

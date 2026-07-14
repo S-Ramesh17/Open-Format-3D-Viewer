@@ -41,12 +41,9 @@ async def _setup_user_project_model(client: AsyncClient, email: str) -> tuple[st
 
 
 VALID_ANNOTATION = {
-    "title": "Crack in column",
-    "body": "Visible crack near grid A3",
-    "position": {
-        "x": 1.0, "y": 2.0, "z": 3.0,
-        "normal_x": 0.0, "normal_y": 1.0, "normal_z": 0.0,
-    },
+    "message": "Visible crack near grid A3",
+    "position_xyz": [1.0, 2.0, 3.0],
+    "normal_xyz": [0.0, 1.0, 0.0],
 }
 
 
@@ -67,7 +64,7 @@ class TestCreateAnnotation:
 
         assert resp.status_code == 201
         data = resp.json()["data"]
-        assert data["title"] == "Crack in column"
+        assert data["message"] == "Visible crack near grid A3"
         assert data["status"] == "open"
         assert "id" in data
 
@@ -78,26 +75,26 @@ class TestCreateAnnotation:
         )
         assert resp.status_code == 401
 
-    async def test_create_strips_html_from_title(self, client: AsyncClient, unique_email: str):
+    async def test_create_strips_html_from_message(self, client: AsyncClient, unique_email: str):
         _, model_id = await _setup_user_project_model(client, unique_email)
 
         with patch("app.services.annotations.publish_model_event", new_callable=AsyncMock), \
              patch("app.services.annotations.dispatch_event", new_callable=AsyncMock):
             resp = await client.post(
                 f"/v1/models/{model_id}/annotations",
-                json={**VALID_ANNOTATION, "title": "<script>alert(1)</script>Crack"},
+                json={**VALID_ANNOTATION, "message": "<script>alert(1)</script>Crack"},
             )
 
         assert resp.status_code == 201
-        title = resp.json()["data"]["title"]
-        assert "<script>" not in title
-        assert "Crack" in title
+        message = resp.json()["data"]["message"]
+        assert "<script>" not in message
+        assert "Crack" in message
 
     async def test_create_missing_position_fails(self, client: AsyncClient, unique_email: str):
         _, model_id = await _setup_user_project_model(client, unique_email)
         resp = await client.post(
             f"/v1/models/{model_id}/annotations",
-            json={"title": "No position"},
+            json={"message": "No position"},
         )
         assert resp.status_code == 400
 
@@ -185,18 +182,18 @@ class TestUpdateAnnotation:
             )
         return resp.json()["data"]["id"]
 
-    async def test_update_title(self, client: AsyncClient, unique_email: str):
+    async def test_update_message(self, client: AsyncClient, unique_email: str):
         _, model_id = await _setup_user_project_model(client, unique_email)
         ann_id = await self._create_annotation(client, model_id)
 
         with patch("app.services.annotations.publish_model_event", new_callable=AsyncMock):
             resp = await client.patch(
                 f"/v1/annotations/{ann_id}",
-                json={"title": "Updated Title"},
+                json={"message": "Updated Message"},
             )
 
         assert resp.status_code == 200
-        assert resp.json()["data"]["title"] == "Updated Title"
+        assert resp.json()["data"]["message"] == "Updated Message"
 
     async def test_update_status_to_resolved(self, client: AsyncClient, unique_email: str):
         _, model_id = await _setup_user_project_model(client, unique_email)
@@ -237,7 +234,7 @@ class TestUpdateAnnotation:
     async def test_update_requires_auth(self, client: AsyncClient):
         resp = await client.patch(
             f"/v1/annotations/{uuid.uuid4()}",
-            json={"title": "X"},
+            json={"message": "X"},
         )
         assert resp.status_code == 401
 
@@ -252,7 +249,7 @@ class TestUpdateAnnotation:
         await client.post("/v1/projects", json={"name": "X"})
         resp = await client.patch(
             f"/v1/annotations/{uuid.uuid4()}",
-            json={"title": "X"},
+            json={"message": "X"},
         )
         assert resp.status_code == 404
 
