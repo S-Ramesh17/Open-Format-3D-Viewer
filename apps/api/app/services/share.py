@@ -91,7 +91,7 @@ async def get_share_link(token: str, db: AsyncSession) -> tuple[ShareLink, Publi
     public = PublicModelResponse(
         id=model.id,
         name=model.name or model.original_filename,
-        file_format=model.file_format,
+        format=model.format,
         status=model.status,
         created_at=model.created_at,
         updated_at=model.updated_at,

@@ -142,7 +142,7 @@ async def list_project_members(
             user_id=member.user_id,
             role=member.role,
             email=email,
-            full_name=full_name,
+            name=full_name,
         )
         for member, email, full_name in rows
     ]
@@ -197,7 +197,7 @@ async def invite_project_member(
         user_id=member.user_id,
         role=member.role,
         email=user.email,
-        full_name=user.full_name,
+        name=user.full_name,
     )
 
 
@@ -238,7 +238,7 @@ async def update_project_member_role(
         user_id=member.user_id,
         role=member.role,
         email=user.email,
-        full_name=user.full_name,
+        name=user.full_name,
     )
 
 

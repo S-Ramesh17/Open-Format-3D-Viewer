@@ -283,7 +283,7 @@ def delete_raw_object(storage_key: str) -> None:
 
 def delete_processed_objects(prefix: str) -> None:
     """Delete every processed chunk under a model's output prefix
-    (model.s3_processed_prefix). Idempotent — a missing prefix/directory
+    (model.processed_s3_prefix). Idempotent — a missing prefix/directory
     is not an error."""
     if not prefix:
         return

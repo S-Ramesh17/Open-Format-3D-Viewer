@@ -313,11 +313,11 @@ class TestProjectMembers:
         list_resp = await client.get(f"/v1/projects/{project_id}/members")
         assert len(list_resp.json()["data"]) == 2
 
-    async def test_members_include_email_and_full_name(
+    async def test_members_include_email_and_name(
         self, client: AsyncClient, unique_email: str
     ):
         """
-        Regression test: ProjectMemberResponse must expose email/full_name
+        Regression test: ProjectMemberResponse must expose email/name
         for every member — invite response, role-update response, and the
         list endpoint — not just user_id/role. A UI can't render a member
         list from opaque UUIDs alone.
@@ -335,19 +335,19 @@ class TestProjectMembers:
         )
         invited = invite_resp.json()["data"]
         assert invited["email"] == email_b
-        assert invited["full_name"] == "Invitee Full Name"
+        assert invited["name"] == "Invitee Full Name"
 
         list_resp = await client.get(f"/v1/projects/{project_id}/members")
         members_by_email = {m["email"]: m for m in list_resp.json()["data"]}
-        assert members_by_email[unique_email]["full_name"] == "Owner Full Name"
-        assert members_by_email[email_b]["full_name"] == "Invitee Full Name"
+        assert members_by_email[unique_email]["name"] == "Owner Full Name"
+        assert members_by_email[email_b]["name"] == "Invitee Full Name"
 
         role_resp = await client.patch(
             f"/v1/projects/{project_id}/members/{invited['user_id']}",
             json={"role": "editor"},
         )
         assert role_resp.json()["data"]["email"] == email_b
-        assert role_resp.json()["data"]["full_name"] == "Invitee Full Name"
+        assert role_resp.json()["data"]["name"] == "Invitee Full Name"
 
     async def test_invite_member_unknown_email_404(self, client: AsyncClient, unique_email: str):
         await _register_and_login(client, unique_email)

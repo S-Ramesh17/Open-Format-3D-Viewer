@@ -109,12 +109,12 @@ class RevokeApiKeyRequest(BaseModel):
 class UserResponse(BaseModel):
     id: uuid.UUID
     email: str
-    full_name: str | None
+    name: str | None = Field(default=None, validation_alias="full_name")
     plan: str
     provider: str | None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class AuthResponse(BaseModel):

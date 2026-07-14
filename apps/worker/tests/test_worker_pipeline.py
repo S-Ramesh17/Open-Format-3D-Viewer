@@ -24,10 +24,10 @@ class TestScanFlow:
         return {
             "id": model_id or str(uuid.uuid4()),
             "uploaded_by": str(uuid.uuid4()),
-            "s3_raw_key": "user/model/test.ifc",
-            "s3_processed_prefix": None,
+            "raw_s3_key": "user/model/test.ifc",
+            "processed_s3_prefix": None,
             "status": "processing",
-            "file_format": file_format,
+            "format": file_format,
         }
 
     def test_clean_scan_dispatches_processing_task(self, tmp_path):

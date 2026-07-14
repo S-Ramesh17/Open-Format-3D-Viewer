@@ -145,8 +145,8 @@ async def initiate_upload(
         uploaded_by=user.id,
         original_filename=safe_filename,
         name=data.name or safe_filename,
-        file_format=file_format,
-        s3_raw_key=storage_key,
+        format=file_format,
+        raw_s3_key=storage_key,
         file_size_bytes=data.size_bytes,
         status="pending",
     )
@@ -171,7 +171,7 @@ async def confirm_upload(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse
     if model.status != "pending":
         raise ValidationException(f"Model is not in pending state (current: {model.status})")
 
-    s3_meta = verify_object_exists(model.s3_raw_key)
+    s3_meta = verify_object_exists(model.raw_s3_key)
 
     if model.file_size_bytes and abs(s3_meta["size_bytes"] - model.file_size_bytes) > 1024:
         model.status = "failed"
@@ -181,7 +181,7 @@ async def confirm_upload(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse
 
     # Authoritative MIME validation against actual bytes
     try:
-        header_bytes = fetch_object_header_bytes(model.s3_raw_key)
+        header_bytes = fetch_object_header_bytes(model.raw_s3_key)
         validate_mime_type_from_bytes(header_bytes, model.original_filename)
     except ValidationException as exc:
         model.status = "failed"
@@ -195,7 +195,7 @@ async def confirm_upload(model_id: uuid.UUID, db: AsyncSession) -> ModelResponse
     await db.commit()
     await db.refresh(model)
     
-    _storage_svc.trigger_clamav_scan(str(model.id), model.s3_raw_key)
+    _storage_svc.trigger_clamav_scan(str(model.id), model.raw_s3_key)
 
     await publish_model_event(
         str(model.uploaded_by),
@@ -238,20 +238,20 @@ async def delete_model(model_id: uuid.UUID, db: AsyncSession) -> None:
     # orphaned object can be found and swept later, same as the worker's
     # existing cleanup_abandoned_uploads sweeper does for abandoned uploads.
     try:
-        _storage_svc.delete_raw_object(model.s3_raw_key)
+        _storage_svc.delete_raw_object(model.raw_s3_key)
     except Exception:
         logger.exception(
-            "Failed to delete raw storage object for model_id=%s (s3_raw_key=%s) — "
+            "Failed to delete raw storage object for model_id=%s (raw_s3_key=%s) — "
             "orphaned object requires manual cleanup",
-            model_id, model.s3_raw_key,
+            model_id, model.raw_s3_key,
         )
     try:
-        _storage_svc.delete_processed_objects(model.s3_processed_prefix)
+        _storage_svc.delete_processed_objects(model.processed_s3_prefix)
     except Exception:
         logger.exception(
             "Failed to delete processed storage objects for model_id=%s (prefix=%s) — "
             "orphaned objects require manual cleanup",
-            model_id, model.s3_processed_prefix,
+            model_id, model.processed_s3_prefix,
         )
 
     await db.delete(model)
@@ -330,7 +330,7 @@ async def get_chunks(model_id: uuid.UUID, db: AsyncSession) -> list[str]:
 
     For IFC models: chunks are stored as model_metadata.properties.xkt_chunks
     For STEP/GLTF models: stored as model_metadata.properties.processed_keys
-    Falls back to s3_processed_prefix if metadata has not been written yet.
+    Falls back to processed_s3_prefix if metadata has not been written yet.
     """
     from app.services.storage import build_cdn_url
 
@@ -359,7 +359,7 @@ async def get_chunks(model_id: uuid.UUID, db: AsyncSession) -> list[str]:
             return [build_cdn_url(key) for key in xkt_chunks]
 
     # Fallback: no explicit keys in metadata, prefix only
-    if not model.s3_processed_prefix:
+    if not model.processed_s3_prefix:
         return []
 
-    return [build_cdn_url(model.s3_processed_prefix)]
+    return [build_cdn_url(model.processed_s3_prefix)]

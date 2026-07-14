@@ -114,7 +114,7 @@ class ProjectMemberResponse(BaseModel):
     user_id: uuid.UUID
     role: str
     email: str
-    full_name: str | None
+    name: str | None
 
     model_config = {"from_attributes": True}
 

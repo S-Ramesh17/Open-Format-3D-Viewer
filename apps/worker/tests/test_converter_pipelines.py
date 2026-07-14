@@ -124,10 +124,10 @@ class TestConverterTimeoutHandling:
         return {
             "id": model_id,
             "uploaded_by": str(uuid.uuid4()),
-            "s3_raw_key": "user/model/test.bin",
-            "s3_processed_prefix": None,
+            "raw_s3_key": "user/model/test.bin",
+            "processed_s3_prefix": None,
             "status": "processing",
-            "file_format": "test",
+            "format": "test",
         }
 
     @pytest.mark.parametrize("task,mod", CONVERTERS, ids=[m for _, m in CONVERTERS])

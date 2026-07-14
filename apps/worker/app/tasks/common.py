@@ -128,8 +128,8 @@ def get_model_row(engine, model_id: str) -> dict | None:
     with engine.connect() as conn:
         row = conn.execute(
             _raw_sql(
-                "SELECT id, uploaded_by, s3_raw_key, s3_processed_prefix, "
-                "status, file_format "
+                "SELECT id, uploaded_by, raw_s3_key, processed_s3_prefix, "
+                "status, format "
                 "FROM models WHERE id = :mid"
             ),
             {"mid": model_id},
@@ -143,7 +143,7 @@ def update_model_status(
     engine,
     model_id: str,
     status: str,
-    s3_processed_prefix: str | None = None,
+    processed_s3_prefix: str | None = None,
     error_message: str | None = None,
     element_count: int | None = None,
     bounds_min_xyz: list[float] | None = None,
@@ -151,9 +151,9 @@ def update_model_status(
 ) -> None:
     set_clauses = "status = :status, updated_at = now()"
     params: dict = {"status": status, "model_id": model_id}
-    if s3_processed_prefix is not None:
-        set_clauses += ", s3_processed_prefix = :prefix"
-        params["prefix"] = s3_processed_prefix
+    if processed_s3_prefix is not None:
+        set_clauses += ", processed_s3_prefix = :prefix"
+        params["prefix"] = processed_s3_prefix
     if error_message is not None:
         set_clauses += ", error_message = :err"
         params["err"] = error_message[:2000]
@@ -482,7 +482,7 @@ def cleanup_abandoned_uploads():
     
     with engine.connect() as conn:
         rows = conn.execute(
-            _raw_sql("SELECT id, s3_raw_key FROM models WHERE status = 'pending' AND created_at < :cutoff"),
+            _raw_sql("SELECT id, raw_s3_key FROM models WHERE status = 'pending' AND created_at < :cutoff"),
             {"cutoff": cutoff}
         ).fetchall()
         

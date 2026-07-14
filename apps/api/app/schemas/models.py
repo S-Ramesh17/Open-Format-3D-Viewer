@@ -57,7 +57,7 @@ class ModelResponse(BaseModel):
     uploaded_by: uuid.UUID
     original_filename: str
     name: str | None = None
-    file_format: str
+    format: str
     status: str
     file_size_bytes: int | None
     error_message: str | None

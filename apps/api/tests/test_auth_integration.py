@@ -197,7 +197,7 @@ class TestMe:
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["email"] == unique_email
-        assert data["full_name"] == "Test User"
+        assert data["name"] == "Test User"
         assert "id" in data
 
     async def test_me_without_auth_fails(self, client: AsyncClient):

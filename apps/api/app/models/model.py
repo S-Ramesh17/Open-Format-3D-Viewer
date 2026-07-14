@@ -22,12 +22,12 @@ class Model(Base):
     )
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
     name: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    file_format: Mapped[str] = mapped_column(
+    format: Mapped[str] = mapped_column(
         Enum("ifc", "gltf", "glb", "step", "stp", "obj", "stl", name="file_format_enum"),
         nullable=False,
     )
-    s3_raw_key: Mapped[str | None] = mapped_column(String(1000))
-    s3_processed_prefix: Mapped[str | None] = mapped_column(String(1000))
+    raw_s3_key: Mapped[str | None] = mapped_column(String(1000))
+    processed_s3_prefix: Mapped[str | None] = mapped_column(String(1000))
     file_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(
         Enum("pending", "processing", "ready", "failed", name="model_status_enum"),

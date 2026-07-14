@@ -31,7 +31,7 @@ class PublicModelResponse(BaseModel):
     """
     id: uuid.UUID
     name: str          # always populated in service layer via `name or original_filename`
-    file_format: str
+    format: str
     status: str
     created_at: datetime
     updated_at: datetime
