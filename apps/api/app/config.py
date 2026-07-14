@@ -3,7 +3,7 @@ import math
 from typing import Literal
 
 from pydantic_settings import BaseSettings
-from pydantic import Field, computed_field, field_validator, model_validator
+from pydantic import AliasChoices, Field, computed_field, field_validator, model_validator
 
 # Placeholder values that must never be used as a real secret. Checked
 # case-insensitively so ".env.example" style values are always rejected.
@@ -41,7 +41,7 @@ def _shannon_entropy_bits_per_char(value: str) -> float:
 
 class Settings(BaseSettings):
     DATABASE_URL: str
-    SECRET_KEY: str
+    SECRET_KEY: str = Field(validation_alias=AliasChoices("JWT_SECRET", "SECRET_KEY"))
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"
     
     WORKER_METRICS_PORT: int = Field(
