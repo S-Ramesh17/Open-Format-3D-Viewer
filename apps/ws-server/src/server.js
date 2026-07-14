@@ -239,75 +239,9 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
     lastCursorBroadcastAt: 0,
   };
 
-  // ── Dedicated Redis subscriber for this connection ────────────────────────
-  // Each connection needs its OWN subscriber client — ioredis subscriber mode
-  // is exclusive (can only call subscribe/unsubscribe, not regular commands).
-  //
-  // RACE CONDITION FIX: this subscriber is a brand-new Redis connection
-  // (fresh TCP handshake), which is measurably slower than the WS upgrade
-  // completing on the client side. Previously the client was registered in
-  // userConnections and rooms immediately, while subscribe() ran
-  // fire-and-forget in the background — a MODEL_READY/MODEL_PROCESSING
-  // event published in that window was permanently lost (Redis pub/sub
-  // does not buffer/replay). Everything that makes this connection
-  // "active" (connection map, room join, heartbeat, client message
-  // handling) now happens only after subscription is confirmed.
-  const subscriber = new Redis(REDIS_URL, {
-    lazyConnect: false,
-    enableOfflineQueue: true,
-    retryStrategy: (times) => Math.min(times * 200, 5000),
-  });
-
-  const redisChannel = `model_events:${userId}`;
-
-  // Attach the message/error listeners BEFORE subscribing (standard ioredis
-  // pattern) so there's no window where a delivered message could arrive
-  // with no listener registered to receive it.
-  subscriber.on('message', (channel, message) => {
-    redisEventsReceived.inc();
-    if (channel !== redisChannel) return;
-    if (client.socket.readyState === 1) {
-      client.socket.send(message);
-      messagesSent.inc();
-    } else {
-      messagesDropped.inc();
-    }
-  });
-
-  subscriber.on('error', (err) => {
-    redisPublishFailures.inc();
-    fastify.log.warn({ err, userId }, 'Subscriber Redis error');
-  });
-
-  try {
-    await subscriber.subscribe(redisChannel);
-  } catch (err) {
-    fastify.log.error(
-      { err, userId, redisChannel },
-      'Redis subscribe failed during WebSocket connect — closing connection to avoid a client that appears connected but cannot receive model events'
-    );
-    // No orphan subscriber: this connection was never registered anywhere
-    // (not in userConnections, no room), so there is nothing else to clean
-    // up besides the subscriber itself.
-    await subscriber.quit().catch(() => {});
-    socket.close(1011, 'Redis subscription failed');
-    return;
-  }
-
-  fastify.log.debug({ redisChannel }, 'Subscribed to Redis channel');
-
-  // ── Subscription confirmed — connection is now considered active ─────────
-  if (userConnections.has(userId)) {
-    reconnections.inc();
-  }
-  connectedClients.inc();
-
-  fastify.log.info({ userId, initialModelId }, 'WebSocket connected');
-
-  if (!userConnections.has(userId)) userConnections.set(userId, new Set());
-  userConnections.get(userId).add(client);
-
   // ── Room helpers ──────────────────────────────────────────────────────────
+  // Declared before the Redis subscribe step (moved up from where they used
+  // to live) so processMessage(), below, can close over them.
   let currentModelId = null;
 
   function joinRoom(modelId) {
@@ -330,38 +264,24 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
     fastify.log.debug({ userId, modelId }, 'Left room');
   }
 
-  if (initialModelId) joinRoom(initialModelId);
+  // ── Connection readiness gate ─────────────────────────────────────────────
+  // A WS upgrade completes (and the browser sees `open`) synchronously,
+  // well before the async setup below (Redis subscribe, room join,
+  // heartbeat start) finishes. `socket.on('message', ...)` is a plain
+  // EventEmitter listener — Node does not buffer/replay events emitted
+  // before a listener is attached, so a message the client sends in that
+  // window would previously be lost entirely, not merely dropped by a
+  // guard. Attaching the listener immediately (below, before any `await`)
+  // and queueing until `connectionReady` closes that window instead of
+  // narrowing it.
+  let connectionReady = false;
+  const pendingMessages = [];
+  // Defensive cap: bounds memory if a client floods messages during the
+  // (normally sub-second) init window. Generous enough to never trigger
+  // in legitimate use.
+  const MAX_PENDING_MESSAGES = 100;
 
-  // ── Heartbeat ─────────────────────────────────────────────────────────────
-  function startHeartbeat() {
-    client.heartbeatTimer = setInterval(() => {
-      if (client.socket.readyState !== 1) {
-        cleanup();
-        return;
-      }
-      client.isAlive = false;
-      send(client.socket, { event: 'PING' });
-      client.pongTimer = setTimeout(() => {
-        if (!client.isAlive) {
-          fastify.log.warn({ userId }, 'Heartbeat timeout — closing');
-          client.socket.close(4002, 'Heartbeat timeout');
-          cleanup();
-        }
-      }, PONG_TIMEOUT_MS);
-    }, HEARTBEAT_INTERVAL_MS);
-  }
-
-  function stopHeartbeat() {
-    if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);
-    if (client.pongTimer) clearTimeout(client.pongTimer);
-    client.heartbeatTimer = null;
-    client.pongTimer = null;
-  }
-
-  startHeartbeat();
-
-  // ── Message handler ───────────────────────────────────────────────────────
-  socket.on('message', (raw) => {
+  function processMessage(raw) {
     let msg;
     try {
       msg = JSON.parse(raw.toString());
@@ -420,7 +340,134 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
         fastify.log.debug({ userId, event: msg.event }, 'Unknown event type');
         break;
     }
+  }
+
+  // Attached now — before the Redis subscribe await below — so no message
+  // sent immediately after `open` can arrive with no listener registered
+  // at all. Messages are queued until initialization finishes.
+  socket.on('message', (raw) => {
+    if (!connectionReady) {
+      if (pendingMessages.length >= MAX_PENDING_MESSAGES) {
+        fastify.log.warn({ userId }, 'Pending message queue full during init — dropping');
+        return;
+      }
+      pendingMessages.push(raw);
+      return;
+    }
+    processMessage(raw);
   });
+
+  // ── Dedicated Redis subscriber for this connection ────────────────────────
+  // Each connection needs its OWN subscriber client — ioredis subscriber mode
+  // is exclusive (can only call subscribe/unsubscribe, not regular commands).
+  //
+  // RACE CONDITION FIX: this subscriber is a brand-new Redis connection
+  // (fresh TCP handshake), which is measurably slower than the WS upgrade
+  // completing on the client side. Previously the client was registered in
+  // userConnections and rooms immediately, while subscribe() ran
+  // fire-and-forget in the background — a MODEL_READY/MODEL_PROCESSING
+  // event published in that window was permanently lost (Redis pub/sub
+  // does not buffer/replay). Everything that makes this connection
+  // "active" (connection map, room join, heartbeat, client message
+  // handling) now happens only after subscription is confirmed.
+  const subscriber = new Redis(REDIS_URL, {
+    lazyConnect: false,
+    enableOfflineQueue: true,
+    retryStrategy: (times) => Math.min(times * 200, 5000),
+  });
+
+  const redisChannel = `model_events:${userId}`;
+
+  // Attach the message/error listeners BEFORE subscribing (standard ioredis
+  // pattern) so there's no window where a delivered message could arrive
+  // with no listener registered to receive it.
+  subscriber.on('message', (channel, message) => {
+    redisEventsReceived.inc();
+    if (channel !== redisChannel) return;
+    if (client.socket.readyState === 1) {
+      client.socket.send(message);
+      messagesSent.inc();
+    } else {
+      messagesDropped.inc();
+    }
+  });
+
+  subscriber.on('error', (err) => {
+    redisPublishFailures.inc();
+    fastify.log.warn({ err, userId }, 'Subscriber Redis error');
+  });
+
+  try {
+    await subscriber.subscribe(redisChannel);
+  } catch (err) {
+    fastify.log.error(
+      { err, userId, redisChannel },
+      'Redis subscribe failed during WebSocket connect — closing connection to avoid a client that appears connected but cannot receive model events'
+    );
+    // No orphan subscriber: this connection was never registered anywhere
+    // (not in userConnections, no room), so there is nothing else to clean
+    // up besides the subscriber itself. Any messages queued in
+    // pendingMessages become moot — the socket is being closed and was
+    // never a validly-established connection to begin with.
+    await subscriber.quit().catch(() => {});
+    socket.close(1011, 'Redis subscription failed');
+    return;
+  }
+
+  fastify.log.debug({ redisChannel }, 'Subscribed to Redis channel');
+
+  // ── Subscription confirmed — connection is now considered active ─────────
+  if (userConnections.has(userId)) {
+    reconnections.inc();
+  }
+  connectedClients.inc();
+
+  fastify.log.info({ userId, initialModelId }, 'WebSocket connected');
+
+  if (!userConnections.has(userId)) userConnections.set(userId, new Set());
+  userConnections.get(userId).add(client);
+
+  if (initialModelId) joinRoom(initialModelId);
+
+  // ── Heartbeat ─────────────────────────────────────────────────────────────
+  function startHeartbeat() {
+    client.heartbeatTimer = setInterval(() => {
+      if (client.socket.readyState !== 1) {
+        cleanup();
+        return;
+      }
+      client.isAlive = false;
+      send(client.socket, { event: 'PING' });
+      client.pongTimer = setTimeout(() => {
+        if (!client.isAlive) {
+          fastify.log.warn({ userId }, 'Heartbeat timeout — closing');
+          client.socket.close(4002, 'Heartbeat timeout');
+          cleanup();
+        }
+      }, PONG_TIMEOUT_MS);
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function stopHeartbeat() {
+    if (client.heartbeatTimer) clearInterval(client.heartbeatTimer);
+    if (client.pongTimer) clearTimeout(client.pongTimer);
+    client.heartbeatTimer = null;
+    client.pongTimer = null;
+  }
+
+  startHeartbeat();
+
+  // ── Initialization complete — flip the readiness gate and drain any
+  //    messages the client sent while we were still subscribing/joining.
+  connectionReady = true;
+  if (pendingMessages.length > 0) {
+    fastify.log.debug(
+      { userId, count: pendingMessages.length },
+      'Draining messages queued during connection initialization'
+    );
+    const queued = pendingMessages.splice(0);
+    for (const raw of queued) processMessage(raw);
+  }
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
   function cleanup() {

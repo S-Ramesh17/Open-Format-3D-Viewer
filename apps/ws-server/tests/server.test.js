@@ -95,6 +95,26 @@ function waitForMessage(ws, predicate, timeoutMs = 2000) {
   });
 }
 
+/**
+ * Poll `PUBSUB NUMSUB <channel>` until at least one subscriber is confirmed.
+ *
+ * The client-side WS 'open' event only means the WS handshake finished —
+ * it says nothing about whether the server's async Redis subscribe() for
+ * this connection's channel has actually completed. Publishing right after
+ * 'open' can race ahead of that subscribe() and the message is genuinely
+ * lost (Redis pub/sub does not buffer for a not-yet-subscribed client).
+ * This closes that race deterministically instead of guessing a delay.
+ */
+async function waitForSubscriber(channel, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const [, count] = await publisher.pubsub('NUMSUB', channel);
+    if (Number(count) > 0) return;
+    await sleep(10);
+  }
+  throw new Error(`Timed out waiting for a subscriber on ${channel}`);
+}
+
 before(async () => {
   // Importing the module triggers `await fastify.listen()` for real, exactly
   // as in production. Env vars above must be set before this import.
@@ -238,6 +258,35 @@ test('CURSOR_MOVE broadcasts CURSOR_MOVED with position to other room members', 
   wsB.close();
 });
 
+test('CURSOR_MOVE sent immediately on open (before init completes) is queued and processed, not lost', async () => {
+  const modelId = 'model-early-message-test';
+  const tokenA = makeToken('user-A-early');
+  const tokenB = makeToken('user-B-early');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+
+  // wsB sends CURSOR_MOVE the instant the socket reports 'open', racing the
+  // server's async init (Redis subscribe + room join). Before the fix, a
+  // message sent this early could be lost entirely (no 'message' listener
+  // registered yet), not merely dropped by the currentModelId guard.
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  const moved = waitForMessage(wsA, (m) => m.event === 'CURSOR_MOVED', 3000);
+  wsB.on('open', () => {
+    wsB.send(JSON.stringify({
+      event: 'CURSOR_MOVE',
+      data: { position: { x: 9, y: 8, z: 7 } },
+    }));
+  });
+
+  const msg = await moved;
+  assert.equal(msg.user_id, 'user-B-early');
+  assert.deepEqual(msg.position, { x: 9, y: 8, z: 7 });
+
+  wsA.close();
+  wsB.close();
+});
+
 // ---------------------------------------------------------------------------
 // Annotation events (client-relayed room broadcast)
 // ---------------------------------------------------------------------------
@@ -290,6 +339,7 @@ test('MODEL_READY published on model_events:{userId} is relayed to that user\'s 
   const token = makeToken(userId);
   const ws = connect(`token=${token}`);
   await onceOpen(ws);
+  await waitForSubscriber(`model_events:${userId}`);
 
   const ready = waitForMessage(ws, (m) => m.event === 'MODEL_READY');
   await publisher.publish(
@@ -307,6 +357,7 @@ test('MODEL_PROCESSING published on model_events:{userId} is relayed to that use
   const token = makeToken(userId);
   const ws = connect(`token=${token}`);
   await onceOpen(ws);
+  await waitForSubscriber(`model_events:${userId}`);
 
   const processing = waitForMessage(ws, (m) => m.event === 'MODEL_PROCESSING');
   await publisher.publish(
@@ -325,6 +376,7 @@ test('a MODEL_READY event for a different user is NOT delivered to this socket',
   const token = makeToken(userId);
   const ws = connect(`token=${token}`);
   await onceOpen(ws);
+  await waitForSubscriber(`model_events:${userId}`);
 
   let receivedForeignEvent = false;
   ws.on('message', (raw) => {
@@ -338,7 +390,21 @@ test('a MODEL_READY event for a different user is NOT delivered to this socket',
     `model_events:${otherUserId}`,
     JSON.stringify({ event: 'MODEL_READY', data: { model_id: 'foreign-model', chunk_urls: [] } })
   );
-  await sleep(300);
+
+  // Deterministic replacement for an arbitrary sleep: publish a second,
+  // legitimate event on this socket's own channel and wait for it to
+  // arrive. Redis preserves publish order for a single publisher
+  // connection, so this message's arrival proves the foreign event (published
+  // just before it, by the same publisher) already had its chance to be
+  // relayed — if isolation were broken, receivedForeignEvent would already
+  // be true by the time this resolves.
+  const sentinel = waitForMessage(ws, (m) => m.event === 'MODEL_READY' && m.data?.model_id === 'sentinel');
+  await publisher.publish(
+    `model_events:${userId}`,
+    JSON.stringify({ event: 'MODEL_READY', data: { model_id: 'sentinel', chunk_urls: [] } })
+  );
+  await sentinel;
+
   assert.equal(receivedForeignEvent, false);
 
   ws.close();
