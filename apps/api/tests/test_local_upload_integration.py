@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 async def _setup_user_and_project(client: AsyncClient, email: str) -> str:
     await client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123", "full_name": "Test User"},
+        json={"email": email, "password": "testpass123", "name": "Test User"},
     )
     resp = await client.post("/v1/projects", json={"name": "Local Upload Test"})
     return resp.json()["data"]["id"]

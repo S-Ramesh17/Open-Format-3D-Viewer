@@ -42,7 +42,7 @@ async def share_test_data(db_session: AsyncSession):
         id=uuid.uuid4(),
         email=f"owner_{uuid.uuid4().hex[:8]}@example.com",
         password_hash="$2b$12$notarealhash",
-        full_name="Owner",
+        name="Owner",
     )
     db_session.add(owner)
 
@@ -50,7 +50,7 @@ async def share_test_data(db_session: AsyncSession):
         id=uuid.uuid4(),
         email=f"other_{uuid.uuid4().hex[:8]}@example.com",
         password_hash="$2b$12$notarealhash",
-        full_name="Other",
+        name="Other",
     )
     db_session.add(other_user)
     await db_session.flush()

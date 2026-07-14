@@ -512,7 +512,7 @@ class TestInviteProjectMemberRaceCondition:
         mock_user = MagicMock()
         mock_user.id = uuid.uuid4()
         mock_user.email = "race@example.com"
-        mock_user.full_name = "Race Condition"
+        mock_user.name = "Race Condition"
 
         mock_db = AsyncMock(spec=AsyncSession)
         mock_db.execute = AsyncMock(

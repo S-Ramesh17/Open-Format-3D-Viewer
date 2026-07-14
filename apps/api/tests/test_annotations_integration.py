@@ -21,7 +21,7 @@ async def _setup_user_project_model(client: AsyncClient, email: str) -> tuple[st
     """Register, login, create project + pending model. Returns (project_id, model_id)."""
     await client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123", "full_name": "Test User"},
+        json={"email": email, "password": "testpass123", "name": "Test User"},
     )
     proj_resp = await client.post("/v1/projects", json={"name": "Annotation Test"})
     project_id = proj_resp.json()["data"]["id"]

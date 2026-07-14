@@ -8,7 +8,7 @@ from app.schemas.projects import ProjectCreate
 class TestRegisterRequestSchema:
     def test_valid_registration(self):
         req = RegisterRequest(
-            email="user@example.com", password="securepass123", full_name="Jane"
+            email="user@example.com", password="securepass123", name="Jane"
         )
         assert req.email == "user@example.com"
 

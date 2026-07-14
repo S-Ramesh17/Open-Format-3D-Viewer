@@ -342,7 +342,7 @@ async def chunks_test_data(db_session):
         id=uuid.uuid4(),
         email=f"chunkowner_{uuid.uuid4().hex[:8]}@example.com",
         password_hash="$2b$12$notarealhash",
-        full_name="Chunk Owner",
+        name="Chunk Owner",
     )
     db_session.add(owner)
 
@@ -350,7 +350,7 @@ async def chunks_test_data(db_session):
         id=uuid.uuid4(),
         email=f"chunkoutsider_{uuid.uuid4().hex[:8]}@example.com",
         password_hash="$2b$12$notarealhash",
-        full_name="Outsider",
+        name="Outsider",
     )
     db_session.add(outsider)
     await db_session.flush()

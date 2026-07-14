@@ -19,7 +19,7 @@ class RegisterRequest(BaseModel):
         description="Password must be 8-128 characters.",
         examples=["securepassword123"],
     )
-    full_name: str | None = Field(
+    name: str | None = Field(
         default=None,
         min_length=1,
         max_length=255,
@@ -109,7 +109,7 @@ class RevokeApiKeyRequest(BaseModel):
 class UserResponse(BaseModel):
     id: uuid.UUID
     email: str
-    name: str | None = Field(default=None, validation_alias="full_name")
+    name: str | None = None
     plan: str
     provider: str | None
     created_at: datetime

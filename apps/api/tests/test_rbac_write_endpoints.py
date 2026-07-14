@@ -34,7 +34,7 @@ async def _register_and_create_project(
     """
     reg = await client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123", "full_name": "Owner"},
+        json={"email": email, "password": "testpass123", "name": "Owner"},
     )
     assert reg.status_code == 201, f"Register failed: {reg.text}"
     user_id = reg.json()["data"]["user"]["id"]
@@ -59,7 +59,7 @@ async def _make_viewer_client(
 
     reg = await viewer_client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123", "full_name": "Viewer"},
+        json={"email": email, "password": "testpass123", "name": "Viewer"},
     )
     assert reg.status_code == 201, f"Viewer register failed: {reg.text}"
     viewer_user_id = reg.json()["data"]["user"]["id"]
@@ -247,7 +247,7 @@ class TestEditorCanWrite:
 
         reg = await editor_client.post(
             "/v1/auth/register",
-            json={"email": email, "password": "testpass123", "full_name": "Editor"},
+            json={"email": email, "password": "testpass123", "name": "Editor"},
         )
         editor_user_id = reg.json()["data"]["user"]["id"]
 

@@ -15,17 +15,17 @@ pytestmark = pytest.mark.asyncio
 # ---------------------------------------------------------------------------
 
 async def _register_and_login(
-    client: AsyncClient, email: str, full_name: str = "Test User"
+    client: AsyncClient, email: str, name: str = "Test User"
 ) -> AsyncClient:
     """Register + login a user; returns a client with auth cookies set."""
     await client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123", "full_name": full_name},
+        json={"email": email, "password": "testpass123", "name": name},
     )
     return client
 
 
-async def _register_only(email: str, full_name: str = "Invited User") -> None:
+async def _register_only(email: str, name: str = "Invited User") -> None:
     """
     Registers a user via a throwaway, independent AsyncClient so the
     caller's own `client` fixture session/cookies are left untouched.
@@ -38,7 +38,7 @@ async def _register_only(email: str, full_name: str = "Invited User") -> None:
     async with AsyncClient(transport=transport, base_url="https://testserver") as ac:
         await ac.post(
             "/v1/auth/register",
-            json={"email": email, "password": "testpass123", "full_name": full_name},
+            json={"email": email, "password": "testpass123", "name": name},
         )
 
 
@@ -323,9 +323,9 @@ class TestProjectMembers:
         list from opaque UUIDs alone.
         """
         email_b = f"invitee_{unique_email}"
-        await _register_only(email_b, full_name="Invitee Full Name")
+        await _register_only(email_b, name="Invitee Full Name")
 
-        await _register_and_login(client, unique_email, full_name="Owner Full Name")
+        await _register_and_login(client, unique_email, name="Owner Full Name")
         create_resp = await client.post("/v1/projects", json={"name": "Field Check"})
         project_id = create_resp.json()["data"]["id"]
 

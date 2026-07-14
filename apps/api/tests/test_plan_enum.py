@@ -30,7 +30,7 @@ async def test_enterprise_is_a_valid_plan_value(db_session: AsyncSession):
         id=uuid.uuid4(),
         email=f"enterprise_{uuid.uuid4().hex[:8]}@example.com",
         password_hash="not-a-real-hash",
-        full_name="Enterprise Tester",
+        name="Enterprise Tester",
         plan="enterprise",
     )
     db_session.add(user)
@@ -50,7 +50,7 @@ async def test_free_and_pro_still_valid(db_session: AsyncSession):
             id=uuid.uuid4(),
             email=f"{plan}_{uuid.uuid4().hex[:8]}@example.com",
             password_hash="not-a-real-hash",
-            full_name=f"{plan} Tester",
+            name=f"{plan} Tester",
             plan=plan,
         )
         db_session.add(user)

@@ -37,7 +37,7 @@ async def register_user(
         id=uuid.uuid4(),
         email=data.email,
         password_hash=hash_password(data.password),
-        full_name=data.full_name,
+        name=data.name,
     )
     db.add(user)
     await db.commit()

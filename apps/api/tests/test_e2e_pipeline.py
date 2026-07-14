@@ -24,7 +24,7 @@ VALID_IFC_BYTES = b"ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDAT
 async def _register_and_login(client: AsyncClient, email: str) -> None:
     await client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123!", "full_name": "E2E Tester"},
+        json={"email": email, "password": "testpass123!", "name": "E2E Tester"},
     )
 
 

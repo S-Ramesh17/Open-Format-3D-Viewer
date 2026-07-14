@@ -16,7 +16,7 @@ pytestmark = pytest.mark.asyncio
 async def _register(client: AsyncClient, email: str) -> None:
     await client.post(
         "/v1/auth/register",
-        json={"email": email, "password": "testpass123", "full_name": "Test User"},
+        json={"email": email, "password": "testpass123", "name": "Test User"},
     )
 
 

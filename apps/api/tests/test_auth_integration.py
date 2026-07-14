@@ -14,7 +14,7 @@ class TestRegister:
     async def test_register_happy_path(self, client: AsyncClient, unique_email: str):
         resp = await client.post(
             "/v1/auth/register",
-            json={"email": unique_email, "password": "testpass123", "full_name": "Test User"},
+            json={"email": unique_email, "password": "testpass123", "name": "Test User"},
         )
         assert resp.status_code == 201
         body = resp.json()
@@ -191,7 +191,7 @@ class TestMe:
     async def test_me_returns_current_user(self, client: AsyncClient, unique_email: str):
         await client.post(
             "/v1/auth/register",
-            json={"email": unique_email, "password": "testpass123", "full_name": "Test User"},
+            json={"email": unique_email, "password": "testpass123", "name": "Test User"},
         )
         resp = await client.get("/v1/auth/me")
         assert resp.status_code == 200

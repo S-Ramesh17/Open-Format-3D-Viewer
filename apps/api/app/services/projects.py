@@ -132,7 +132,7 @@ async def list_project_members(
     Caller must already be verified as a project member (enforced at router level).
     """
     result = await db.execute(
-        select(ProjectMember, User.email, User.full_name)
+        select(ProjectMember, User.email, User.name)
         .join(User, User.id == ProjectMember.user_id)
         .where(ProjectMember.project_id == project_id)
     )
@@ -142,9 +142,9 @@ async def list_project_members(
             user_id=member.user_id,
             role=member.role,
             email=email,
-            name=full_name,
+            name=name,
         )
-        for member, email, full_name in rows
+        for member, email, name in rows
     ]
 
 
@@ -197,7 +197,7 @@ async def invite_project_member(
         user_id=member.user_id,
         role=member.role,
         email=user.email,
-        name=user.full_name,
+        name=user.name,
     )
 
 
@@ -238,7 +238,7 @@ async def update_project_member_role(
         user_id=member.user_id,
         role=member.role,
         email=user.email,
-        name=user.full_name,
+        name=user.name,
     )
 
 

@@ -102,7 +102,7 @@ async def handle_google_callback(
             user = User(
                 id=uuid.uuid4(),
                 email=email,
-                full_name=full_name,
+                name=full_name,
                 provider="google",
                 provider_user_id=google_sub,
             )
