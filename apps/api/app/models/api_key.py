@@ -27,5 +27,4 @@ class ApiKey(Base):
 
     __table_args__ = (
         Index("ix_api_keys_user_id", "user_id"),
-        Index("ix_api_keys_key_hash", "key_hash"),
     )

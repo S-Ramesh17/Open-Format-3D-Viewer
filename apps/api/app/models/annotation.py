@@ -41,4 +41,10 @@ class Annotation(Base):
         Index("ix_annotations_model_id", "model_id"),
         Index("ix_annotations_created_by", "created_by"),
         Index("ix_annotations_model_status", "model_id", "status"),
+        Index(
+            "ix_annotations_model_created_at",
+            "model_id",
+            "created_at",
+            postgresql_ops={"created_at": "DESC"},
+        ),
     )

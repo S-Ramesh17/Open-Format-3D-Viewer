@@ -51,4 +51,11 @@ class Model(Base):
         Index("ix_models_project_id", "project_id"),
         Index("ix_models_status", "status"),
         Index("ix_models_uploaded_by", "uploaded_by"),
+        Index("ix_models_project_status", "project_id", "status"),
+        Index(
+            "ix_models_project_created_at",
+            "project_id",
+            "created_at",
+            postgresql_ops={"created_at": "DESC"},
+        ),
     )

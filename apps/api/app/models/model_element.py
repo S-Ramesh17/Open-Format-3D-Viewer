@@ -29,4 +29,5 @@ class ModelElement(Base):
         Index("ix_model_elements_model_id", "model_id"),
         Index("ix_model_elements_model_guid", "model_id", "guid"),
         Index("ix_model_elements_element_type", "element_type"),
+        Index("ix_model_elements_model_element_type", "model_id", "element_type"),
     )
