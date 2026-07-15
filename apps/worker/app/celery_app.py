@@ -6,37 +6,11 @@ import os
 
 from celery.signals import worker_process_init, worker_process_shutdown, celeryd_after_setup
 
-celery_app = Celery("openformat_worker", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
-
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    include=[
-        "app.tasks.ifc",
-        "app.tasks.mesh",
-        "app.tasks.step",
-        "app.tasks.gltf",
-        "app.tasks.obj",
-        "app.tasks.stl",
-        "app.tasks.bcf",
-        "app.tasks.scan",
-        "app.tasks.webhook",
-        "app.tasks.queue_collector",
-        "app.tasks.common",
-        "app.tasks.maintainance" 
-    ]
+celery_app = Celery(
+    "openformat_worker",
+    broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
 )
-# ... rest of your config (metrics, logging, etc.) ...
-# ... init_worker_sentry and other configurations ...
-def _start_worker_metrics_server(sender, instance, **kwargs):
-    """
-    Starts the Prometheus metrics HTTP server persistently in the worker background
-    once the worker daemon setup is complete.
-    """
-    from app.tasks.metrics_server import start_metrics_server
-    start_metrics_server()
 
 
 @worker_process_init.connect
@@ -68,12 +42,6 @@ def _cleanup_prometheus_multiproc_files(pid, **kwargs):
     except Exception:
         pass
 
-
-celery_app = Celery(
-    "openformat_worker",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
-)
 
 celery_app.conf.update(
     task_serializer="json",
@@ -122,6 +90,6 @@ import app.tasks.stl           # noqa: E402, F401
 import app.tasks.bcf           # noqa: E402, F401
 import app.tasks.scan          # noqa: E402, F401
 import app.tasks.webhook       # noqa: E402, F401
-import app.tasks.maintainance  # noqa: E402, F401
+import app.tasks.maintenance   # noqa: E402, F401
   
 celery_app.autodiscover_tasks(["app"])

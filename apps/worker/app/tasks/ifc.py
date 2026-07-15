@@ -395,10 +395,21 @@ def process_model(self: Task, model_id: str) -> dict:
     Full IFC processing pipeline.
     Called by the API layer after upload confirmation.
     """
-    logger.info("...")
-    engine = get_sync_engine()
-    _task_start = __import__('time').monotonic()
-    ACTIVE_TASKS.labels(task_name="ifc.process_model").inc()
+    logger.info("[IFC] Task started model_id=%s", model_id)
+
+    try:
+        engine = get_sync_engine()
+        _task_start = __import__('time').monotonic()
+        ACTIVE_TASKS.labels(task_name="ifc.process_model").inc()
+    except Exception:
+        # Failure here happens before the main try/except below can catch
+        # anything, so without this it falls through to Celery's generic
+        # handler with no [IFC]-prefixed log and no model status update.
+        logger.exception(
+            "[IFC] Failed during task setup (engine/metrics init) model_id=%s", model_id
+        )
+        raise
+
     try:
         # ── 1. Idempotency guard — skip if already terminal (redelivery) ──────
         if is_already_processed(engine, model_id):
@@ -416,8 +427,11 @@ def process_model(self: Task, model_id: str) -> dict:
             release_task_lock(model_id, "app.tasks.ifc.process_model")
             return {"error": "model_not_found", "model_id": model_id}
 
+        logger.info("[IFC] Model row loaded model_id=%s format=%s", model_id, model.get("format"))
+
         user_id = str(model["uploaded_by"])
         s3_raw_key = model["raw_s3_key"]
+
 
         if not s3_raw_key:
             update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
@@ -433,6 +447,7 @@ def process_model(self: Task, model_id: str) -> dict:
                 stage = "download"
                 # ── 2. Download from S3 ──────────────────────────────────────
                 download_raw_file(s3_raw_key, ifc_local)
+                logger.info("[IFC] Download complete model_id=%s", model_id)
                 publish_model_progress(user_id, model_id, 10, "download")
 
                 stage = "size_check"
@@ -473,10 +488,14 @@ def process_model(self: Task, model_id: str) -> dict:
 
                 # ── 7. Build spatial tree ────────────────────────────────────
                 spatial_tree = _build_spatial_tree(ifc_file)
+                logger.info(
+                    "[IFC] Extraction complete model_id=%s elements=%d", model_id, len(elements)
+                )
                 publish_model_progress(user_id, model_id, 50, "extract")
 
                 # ── 8. XKT conversion ────────────────────────────────────────
                 stage = "convert"
+                logger.info("[IFC] Starting XKT conversion model_id=%s", model_id)
                 xkt_files = _convert_to_xkt(ifc_local, xkt_dir)
                 xkt_chunks = _split_xkt_chunks(xkt_files, xkt_dir)
                 publish_model_progress(user_id, model_id, 75, "convert")
@@ -528,6 +547,7 @@ def process_model(self: Task, model_id: str) -> dict:
                     bounds_min_xyz=bounds_min,
                     bounds_max_xyz=bounds_max,
                 )
+                logger.info("[IFC] Model status set to ready model_id=%s", model_id)
 
                 # ── 14. Publish Redis event ────────────────────────────────────
                 chunk_urls = [build_cdn_url(k) for k in uploaded_keys]
