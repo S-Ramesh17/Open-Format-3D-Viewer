@@ -26,6 +26,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { createServer } from 'node:http';
 import jwt from 'jsonwebtoken';
 import WebSocket from 'ws';
 import Redis from 'ioredis';
@@ -33,17 +34,69 @@ import Redis from 'ioredis';
 const TEST_PORT = process.env.WS_TEST_PORT || '8199';
 const JWT_SECRET = 'test-secret-for-ws-server-integration-tests';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379/0';
+const INTERNAL_API_PORT = process.env.WS_TEST_INTERNAL_API_PORT || '8299';
+const INTERNAL_SERVICE_KEY = 'test-internal-service-key';
+const TEST_USER_NAME = 'Test User';
 
 process.env.PORT = TEST_PORT;
 process.env.JWT_SECRET = JWT_SECRET;
 process.env.REDIS_URL = REDIS_URL;
 process.env.WS_METRICS_PORT = process.env.WS_METRICS_PORT || '9199';
 process.env.NODE_ENV = 'test';
+process.env.WS_INTERNAL_API_URL = `http://localhost:${INTERNAL_API_PORT}`;
+process.env.WS_INTERNAL_SERVICE_KEY = INTERNAL_SERVICE_KEY;
 
 const BASE_URL = `ws://localhost:${TEST_PORT}`;
 const HEALTH_URL = `http://localhost:${TEST_PORT}/health`;
 
 let publisher;
+
+// ---------------------------------------------------------------------------
+// Fake internal authorization API (stands in for the real API's
+// GET /internal/models/{id}/authorize during tests). Authorizes everything
+// by default — matching how every pre-existing test in this file already
+// uses arbitrary model_id values with no special naming convention — except
+// model_ids starting with "unauthorized-", which are always denied. This
+// lets existing room/broadcast tests keep working unchanged while adding
+// dedicated authorization tests below.
+// ---------------------------------------------------------------------------
+let fakeInternalApi;
+
+function startFakeInternalApi() {
+  return new Promise((resolve) => {
+    fakeInternalApi = createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      const match = url.pathname.match(/^\/internal\/models\/([^/]+)\/authorize$/);
+
+      if (req.headers['x-internal-service-key'] !== INTERNAL_SERVICE_KEY) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ authorized: false }));
+        return;
+      }
+      if (!match) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      const modelId = match[1];
+      const authorized = !modelId.startsWith('unauthorized-');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(
+        authorized
+          ? { authorized: true, role: 'viewer', user: { name: TEST_USER_NAME } }
+          : { authorized: false }
+      ));
+    });
+    fakeInternalApi.listen(INTERNAL_API_PORT, '0.0.0.0', resolve);
+  });
+}
+
+function stopFakeInternalApi() {
+  return new Promise((resolve) => {
+    if (fakeInternalApi) fakeInternalApi.close(() => resolve());
+    else resolve();
+  });
+}
 
 function makeToken(userId, overrides = {}) {
   return jwt.sign(
@@ -116,6 +169,7 @@ async function waitForSubscriber(channel, timeoutMs = 3000) {
 }
 
 before(async () => {
+  await startFakeInternalApi();
   // Importing the module triggers `await fastify.listen()` for real, exactly
   // as in production. Env vars above must be set before this import.
   await import('../src/server.js');
@@ -126,6 +180,7 @@ before(async () => {
 
 after(async () => {
   await publisher?.quit().catch(() => {});
+  await stopFakeInternalApi();
   // server.js has no exported close/shutdown handle for tests to call, and
   // its SIGTERM/SIGINT handlers are the only teardown path — rather than
   // hang node:test on open sockets/timers, exit explicitly once all tests
@@ -180,6 +235,10 @@ test('JOIN_MODEL broadcasts USER_JOINED to the other room member, not the joiner
 
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
 
   const wsB = connect(`token=${tokenB}`);
   await onceOpen(wsB);
@@ -188,10 +247,113 @@ test('JOIN_MODEL broadcasts USER_JOINED to the other room member, not the joiner
   wsB.send(JSON.stringify({ event: 'JOIN_MODEL', model_id: modelId }));
   const msg = await joined;
   assert.equal(msg.user.id, 'user-B-join');
+  assert.equal(msg.user.name, TEST_USER_NAME);
+  assert.equal(msg.user.avatar, null);
 
   wsA.close();
   wsB.close();
 });
+
+// ---------------------------------------------------------------------------
+// JOIN_MODEL authorization
+//
+// Regression coverage for the fix restoring the internal-API authorization
+// gate on JOIN_MODEL — a prior snapshot of this repo had this check
+// missing entirely (any authenticated user could join any model_id).
+// ---------------------------------------------------------------------------
+
+test('authorized user joins a model and receives no ERROR', async () => {
+  const modelId = 'model-authz-allowed-1';
+  const token = makeToken('user-authz-allowed');
+  const ws = connect(`token=${token}`);
+  await onceOpen(ws);
+
+  let sawError = false;
+  ws.on('message', (raw) => {
+    const msg = JSON.parse(raw.toString());
+    if (msg.event === 'ERROR') sawError = true;
+  });
+
+  ws.send(JSON.stringify({ event: 'JOIN_MODEL', model_id: modelId }));
+  await sleep(200);
+
+  assert.equal(sawError, false);
+  ws.close();
+});
+
+test('a second authorized user joining the same model still gets USER_JOINED broadcast (existing room behavior unaffected)', async () => {
+  const modelId = 'model-authz-allowed-2';
+  const tokenA = makeToken('user-authz-A');
+  const tokenB = makeToken('user-authz-B');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  await sleep(50);
+
+  const wsB = connect(`token=${tokenB}`);
+  await onceOpen(wsB);
+
+  const joined = waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
+  wsB.send(JSON.stringify({ event: 'JOIN_MODEL', model_id: modelId }));
+  const msg = await joined;
+  assert.equal(msg.user.id, 'user-authz-B');
+  assert.equal(msg.user.name, TEST_USER_NAME);
+
+  wsA.close();
+  wsB.close();
+});
+
+test('unauthorized JOIN_MODEL is rejected with MODEL_ACCESS_DENIED and does not join the room', async () => {
+  const modelId = 'unauthorized-model-1';
+  const token = makeToken('user-authz-denied');
+  const ws = connect(`token=${token}`);
+  await onceOpen(ws);
+
+  const denied = waitForMessage(ws, (m) => m.event === 'ERROR');
+  ws.send(JSON.stringify({ event: 'JOIN_MODEL', model_id: modelId }));
+  const msg = await denied;
+
+  assert.equal(msg.code, 'MODEL_ACCESS_DENIED');
+
+  // Confirm it really didn't join: a second user joining the same model_id
+  // should not see a USER_JOINED for the denied user.
+  const tokenObserver = makeToken('user-authz-observer');
+  const wsObserver = connect(`token=${tokenObserver}&model_id=${modelId}`);
+  await onceOpen(wsObserver);
+  await sleep(50);
+
+  let sawDeniedUserJoin = false;
+  wsObserver.on('message', (raw) => {
+    const m = JSON.parse(raw.toString());
+    if (m.event === 'USER_JOINED' && m.user?.id === 'user-authz-denied') sawDeniedUserJoin = true;
+  });
+  await sleep(200);
+  assert.equal(sawDeniedUserJoin, false);
+
+  ws.close();
+  wsObserver.close();
+});
+
+test('internal authorization API unreachable fails closed — JOIN_MODEL is denied, not silently allowed', async () => {
+  const modelId = 'model-authz-service-down';
+  const token = makeToken('user-authz-service-down');
+  const ws = connect(`token=${token}`);
+  await onceOpen(ws);
+
+  await stopFakeInternalApi();
+  try {
+    const denied = waitForMessage(ws, (m) => m.event === 'ERROR');
+    ws.send(JSON.stringify({ event: 'JOIN_MODEL', model_id: modelId }));
+    const msg = await denied;
+    assert.equal(msg.code, 'MODEL_ACCESS_DENIED');
+  } finally {
+    // Restore for every subsequent test in this file.
+    await startFakeInternalApi();
+  }
+
+  ws.close();
+});
+
 
 test('LEAVE_MODEL broadcasts USER_LEFT to remaining room members', async () => {
   const modelId = 'model-leave-test-1';
@@ -200,6 +362,10 @@ test('LEAVE_MODEL broadcasts USER_LEFT to remaining room members', async () => {
 
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
   const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
   await onceOpen(wsB);
 
@@ -241,6 +407,10 @@ test('CURSOR_MOVE broadcasts CURSOR_MOVED with position to other room members', 
 
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
   const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
   await onceOpen(wsB);
   await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
@@ -265,6 +435,10 @@ test('CURSOR_MOVE sent immediately on open (before init completes) is queued and
 
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
 
   // wsB sends CURSOR_MOVE the instant the socket reports 'open', racing the
   // server's async init (Redis subscribe + room join). Before the fix, a
@@ -298,6 +472,10 @@ test('ANNOTATION_CREATED is relayed to other room members', async () => {
 
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
   const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
   await onceOpen(wsB);
   await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
@@ -338,6 +516,10 @@ test('ANNOTATION_CREATED published on ws:room:{model_id} by the API reaches ever
 
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
   const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
   await onceOpen(wsB);
   // Wait for both to have actually joined the room (not just opened the
@@ -376,6 +558,10 @@ test('ANNOTATION_UPDATED published on ws:room:{model_id} reaches every room memb
 
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
   const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
   await onceOpen(wsB);
   await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
@@ -411,6 +597,10 @@ test('a room event for a different model_id is NOT delivered to this room', asyn
   // JOIN_MODEL room registration finished before publishing could race it.
   const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
   await onceOpen(wsA);
+  // wsA's initial model_id join is now authorization-gated (async internal API
+  // call) rather than synchronous — give it a moment to complete before any
+  // other socket's action would need to broadcast to it.
+  await sleep(50);
   const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
   await onceOpen(wsB);
   await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');

@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     # Frontend redirect target (OAuth callback)
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Shared secret for service-to-service calls from ws-server (the
+    # JOIN_MODEL authorization check). Empty by default so the endpoint
+    # fails closed until explicitly configured — never falls back to
+    # "no auth required".
+    INTERNAL_SERVICE_KEY: str = ""
+
     # Rate limiting
     RATE_LIMIT_FREE_PER_HOUR: int = 100
     RATE_LIMIT_PRO_PER_HOUR: int = 10000

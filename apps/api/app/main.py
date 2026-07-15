@@ -19,6 +19,7 @@ import asyncio
 from app.routers import webhooks as webhooks_router
 from app.routers import projects as projects_router
 from app.routers import share as share_router
+from app.routers import internal as internal_router
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Prometheus metrics — optional; present when poetry install has run
@@ -135,6 +136,7 @@ app.include_router(models_router.router)
 app.include_router(annotations_router.router)
 app.include_router(webhooks_router.router)
 app.include_router(share_router.router)
+app.include_router(internal_router.router)
 
 # TEMP LOCAL STORAGE — serve locally-stored processed files
 # REMOVE AFTER S3 CREDENTIALS AVAILABLE

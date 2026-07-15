@@ -67,6 +67,16 @@ export const cursorMovesThrottled = new client.Counter({
   registers: [register],
 });
 
+// JOIN_MODEL authorization check outcomes (does NOT count successful
+// authorizations — only failures/denials, so this being nonzero at rest
+// is itself a useful alert signal).
+export const authorizationFailures = new client.Counter({
+  name: 'ws_authorization_failures_total',
+  help: 'Total JOIN_MODEL authorization failures (denied, timeout, or network error), labeled by reason',
+  labelNames: ['reason'],
+  registers: [register],
+});
+
 /**
  * Start the Prometheus metrics HTTP server.
  * @param {number} port - defaults to METRICS_PORT env var or 9091

@@ -64,6 +64,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         try:
+            # Service-to-service internal endpoints (ws-server's JOIN_MODEL
+            # authorization check, etc.) are not end-user traffic and are
+            # already gated by their own shared-secret auth — no reason to
+            # also throttle them against a per-IP/per-user consumer limit.
+            if request.url.path.startswith("/internal/"):
+                return await call_next(request)
+
             # Skip exempt paths
             if request.url.path in EXEMPT_PATHS:
                 return await call_next(request)

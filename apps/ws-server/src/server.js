@@ -31,6 +31,7 @@ import {
   reconnections,
   roomBroadcasts,
   cursorMovesThrottled,
+  authorizationFailures,
   startMetricsServer,
 } from './metrics.js';
 // ---------------------------------------------------------------------------
@@ -44,6 +45,23 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379/0';
+
+// Internal, service-to-service call to the API to authorize JOIN_MODEL
+// requests (does this user have project/model membership?). ws-server has
+// no direct DB access by design — this is the one and only place it asks
+// "am I allowed to let this user into this room?" rather than trusting
+// the client-supplied model_id at face value. The same response also
+// carries the user's display name, used for the USER_JOINED payload.
+const WS_INTERNAL_API_URL = process.env.WS_INTERNAL_API_URL || '';
+const WS_INTERNAL_SERVICE_KEY = process.env.WS_INTERNAL_SERVICE_KEY || '';
+if (!WS_INTERNAL_API_URL || !WS_INTERNAL_SERVICE_KEY) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    'WARNING: WS_INTERNAL_API_URL / WS_INTERNAL_SERVICE_KEY not fully configured — ' +
+    'all JOIN_MODEL requests will fail closed (MODEL_ACCESS_DENIED) until this is set.'
+  );
+}
+const AUTHORIZE_TIMEOUT_MS = 3_000;
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
@@ -147,6 +165,55 @@ function verifyToken(token) {
 }
 
 // ---------------------------------------------------------------------------
+// JOIN_MODEL authorization
+// ---------------------------------------------------------------------------
+/**
+ * Ask the API whether `userId` has project/model membership for `modelId`.
+ * Fails CLOSED: any network error, timeout, non-200 response, or malformed
+ * body is treated as "not authorized" — never silently allows a join when
+ * the authorization service can't be reached.
+ * @param {string} userId
+ * @param {string} modelId
+ * @returns {Promise<{authorized: boolean, name?: string}>}
+ */
+async function authorizeModelAccess(userId, modelId) {
+  if (!WS_INTERNAL_API_URL || !WS_INTERNAL_SERVICE_KEY) {
+    authorizationFailures.inc({ reason: 'not_configured' });
+    return { authorized: false };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUTHORIZE_TIMEOUT_MS);
+
+  try {
+    const url = `${WS_INTERNAL_API_URL}/internal/models/${encodeURIComponent(modelId)}/authorize?user_id=${encodeURIComponent(userId)}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-Internal-Service-Key': WS_INTERNAL_SERVICE_KEY },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      authorizationFailures.inc({ reason: `http_${res.status}` });
+      return { authorized: false };
+    }
+
+    const body = await res.json();
+    if (body?.authorized !== true) {
+      authorizationFailures.inc({ reason: 'denied' });
+      return { authorized: false };
+    }
+    return { authorized: true, name: body?.user?.name ?? null };
+  } catch (err) {
+    authorizationFailures.inc({ reason: err.name === 'AbortError' ? 'timeout' : 'network_error' });
+    fastify.log.warn({ err, userId, modelId }, 'Model authorization check failed — denying (fail closed)');
+    return { authorized: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 /**
@@ -243,6 +310,10 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
   // Declared before the Redis subscribe step (moved up from where they used
   // to live) so processMessage(), below, can close over them.
   let currentModelId = null;
+  // Cached once authorization succeeds for this connection — avoids a
+  // second internal API round-trip if the same user joins multiple model
+  // rooms during one WS session.
+  let userName = null;
 
   function joinRoom(modelId) {
     if (currentModelId === modelId) return;
@@ -250,8 +321,36 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
     currentModelId = modelId;
     if (!rooms.has(modelId)) rooms.set(modelId, new Set());
     rooms.get(modelId).add(client);
-    broadcast(modelId, { event: 'USER_JOINED', user: { id: userId } }, client);
+    broadcast(
+      modelId,
+      { event: 'USER_JOINED', user: { id: userId, name: userName, avatar: null } },
+      client
+    );
     fastify.log.debug({ userId, modelId }, 'Joined room');
+  }
+
+  /**
+   * Authorization-gated entry point for JOIN_MODEL — the only path that
+   * should ever call joinRoom(). Denies (and does not join) unless the
+   * internal API confirms this user has project/model membership.
+   * @param {string} modelId
+   */
+  async function requestJoinRoom(modelId) {
+    const result = await authorizeModelAccess(userId, modelId);
+    if (!result.authorized) {
+      send(client.socket, {
+        event: 'ERROR',
+        code: 'MODEL_ACCESS_DENIED',
+        message: 'User does not have access to this model',
+      });
+      fastify.log.warn({ userId, modelId }, 'JOIN_MODEL denied — no access');
+      return;
+    }
+    if (userName === null) userName = result.name ?? null;
+    // The client may have disconnected while the authorization check was
+    // in flight — don't join a room on behalf of a socket that's gone.
+    if (client.socket.readyState !== 1) return;
+    joinRoom(modelId);
   }
 
   function leaveRoom(modelId) {
@@ -292,7 +391,11 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
 
     switch (msg.event) {
       case 'JOIN_MODEL': {
-        if (msg.model_id) joinRoom(msg.model_id);
+        if (msg.model_id) {
+          requestJoinRoom(msg.model_id).catch((err) => {
+            fastify.log.error({ err, userId, modelId: msg.model_id }, 'JOIN_MODEL authorization errored');
+          });
+        }
         break;
       }
       case 'LEAVE_MODEL': {
@@ -427,7 +530,17 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
   if (!userConnections.has(userId)) userConnections.set(userId, new Set());
   userConnections.get(userId).add(client);
 
-  if (initialModelId) joinRoom(initialModelId);
+  if (initialModelId) {
+    // Must be awaited, not fire-and-forget: the readiness-gate flush just
+    // below replays any message the client sent before init finished
+    // (e.g. an immediate CURSOR_MOVE). That replay needs currentModelId to
+    // already reflect this join's outcome — otherwise a legitimately
+    // queued message can be silently dropped because the room join is
+    // still in flight when it's processed.
+    await requestJoinRoom(initialModelId).catch((err) => {
+      fastify.log.error({ err, userId, modelId: initialModelId }, 'Initial JOIN_MODEL authorization errored');
+    });
+  }
 
   // ── Heartbeat ─────────────────────────────────────────────────────────────
   function startHeartbeat() {
