@@ -67,6 +67,14 @@ export const cursorMovesThrottled = new client.Counter({
   registers: [register],
 });
 
+// CURSOR_MOVE messages dropped for failing PRD payload validation
+// (position/normal not a well-formed [x, y, z] tuple of finite numbers)
+export const cursorInvalidPayloads = new client.Counter({
+  name: 'ws_cursor_invalid_payloads_total',
+  help: 'Total CURSOR_MOVE messages dropped for malformed position/normal payload',
+  registers: [register],
+});
+
 // JOIN_MODEL authorization check outcomes (does NOT count successful
 // authorizations — only failures/denials, so this being nonzero at rest
 // is itself a useful alert signal).

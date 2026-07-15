@@ -31,6 +31,7 @@ import {
   reconnections,
   roomBroadcasts,
   cursorMovesThrottled,
+  cursorInvalidPayloads,
   authorizationFailures,
   startMetricsServer,
 } from './metrics.js';
@@ -230,6 +231,17 @@ function send(socket, message) {
 }
 
 /**
+ * PRD §6.1: CURSOR_MOVE payload is { model_id, position: [x,y,z], normal: [x,y,z] }.
+ * Validates a field is a well-formed [x, y, z] tuple of finite numbers —
+ * used to reject malformed CURSOR_MOVE payloads instead of relaying garbage.
+ * @param {unknown} v
+ * @returns {boolean}
+ */
+function isVector3(v) {
+  return Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+}
+
+/**
  * Broadcast to all clients in a room, optionally excluding one.
  * @param {string} modelId
  * @param {object} message
@@ -404,15 +416,32 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
       }
       case 'CURSOR_MOVE': {
         if (currentModelId) {
+          // PRD §6.1: CURSOR_MOVE is a flat message — { event, model_id,
+          // position: [x,y,z], normal: [x,y,z] } — same envelope style as
+          // JOIN_MODEL (msg.model_id), not nested under a "data" key.
+          // model_id itself is intentionally ignored here in favor of
+          // currentModelId (the room this connection is authorized into
+          // via JOIN_MODEL) — see security requirement 9: cursor broadcasts
+          // must only ever go to the authorized room, never a client-
+          // supplied one.
+          const { position, normal } = msg;
+          if (!isVector3(position) || (normal !== undefined && !isVector3(normal))) {
+            cursorInvalidPayloads.inc();
+            fastify.log.debug({ userId, modelId: currentModelId }, 'Rejected malformed CURSOR_MOVE payload');
+            break;
+          }
           const now = Date.now();
           if (now - client.lastCursorBroadcastAt < CURSOR_THROTTLE_MS) {
             cursorMovesThrottled.inc();
             break;
           }
           client.lastCursorBroadcastAt = now;
+          // PRD §6.2: CURSOR_MOVED is { user_id, position: [x,y,z] } only —
+          // normal is accepted/validated on input but intentionally not
+          // relayed; the PRD's CURSOR_MOVED schema does not include it.
           broadcast(
             currentModelId,
-            { event: 'CURSOR_MOVED', user_id: userId, position: msg.data?.position },
+            { event: 'CURSOR_MOVED', user_id: userId, position },
             client
           );
           roomBroadcasts.labels({ event_type: 'CURSOR_MOVED' }).inc();

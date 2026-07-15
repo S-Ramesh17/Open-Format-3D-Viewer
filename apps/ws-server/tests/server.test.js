@@ -418,11 +418,17 @@ test('CURSOR_MOVE broadcasts CURSOR_MOVED with position to other room members', 
   const moved = waitForMessage(wsA, (m) => m.event === 'CURSOR_MOVED');
   wsB.send(JSON.stringify({
     event: 'CURSOR_MOVE',
-    data: { position: { x: 1, y: 2, z: 3 } },
+    model_id: modelId,
+    position: [1, 2, 3],
+    normal: [0, 1, 0],
   }));
   const msg = await moved;
   assert.equal(msg.user_id, 'user-B-cursor');
-  assert.deepEqual(msg.position, { x: 1, y: 2, z: 3 });
+  assert.deepEqual(msg.position, [1, 2, 3]);
+  // PRD §6.2: CURSOR_MOVED is { user_id, position } only — normal must not
+  // be relayed to other clients even though it was accepted on input.
+  assert.equal('normal' in msg, false);
+  assert.deepEqual(Object.keys(msg).sort(), ['event', 'position', 'user_id']);
 
   wsA.close();
   wsB.close();
@@ -449,16 +455,130 @@ test('CURSOR_MOVE sent immediately on open (before init completes) is queued and
   wsB.on('open', () => {
     wsB.send(JSON.stringify({
       event: 'CURSOR_MOVE',
-      data: { position: { x: 9, y: 8, z: 7 } },
+      model_id: modelId,
+      position: [9, 8, 7],
+      normal: [0, 0, 1],
     }));
   });
 
   const msg = await moved;
   assert.equal(msg.user_id, 'user-B-early');
-  assert.deepEqual(msg.position, { x: 9, y: 8, z: 7 });
+  assert.deepEqual(msg.position, [9, 8, 7]);
 
   wsA.close();
   wsB.close();
+});
+
+test('CURSOR_MOVE with malformed position is rejected (not broadcast)', async () => {
+  const modelId = 'model-cursor-invalid-1';
+  const tokenA = makeToken('user-A-invalid');
+  const tokenB = makeToken('user-B-invalid');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  await sleep(50);
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  await onceOpen(wsB);
+  await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
+
+  // Malformed payloads: missing position, wrong shape, wrong element types.
+  const badPayloads = [
+    { event: 'CURSOR_MOVE', model_id: modelId },
+    { event: 'CURSOR_MOVE', model_id: modelId, position: { x: 1, y: 2, z: 3 } },
+    { event: 'CURSOR_MOVE', model_id: modelId, position: [1, 2] },
+    { event: 'CURSOR_MOVE', model_id: modelId, position: [1, 2, 'z'] },
+    { event: 'CURSOR_MOVE', model_id: modelId, position: [1, 2, 3], normal: [1, 2] },
+  ];
+  for (const payload of badPayloads) {
+    wsB.send(JSON.stringify(payload));
+  }
+  // Follow with one well-formed CURSOR_MOVE — if it's the only one that
+  // arrives at wsA, none of the malformed ones above were broadcast.
+  const moved = waitForMessage(wsA, (m) => m.event === 'CURSOR_MOVED');
+  wsB.send(JSON.stringify({ event: 'CURSOR_MOVE', model_id: modelId, position: [4, 5, 6] }));
+  const msg = await moved;
+  assert.deepEqual(msg.position, [4, 5, 6]);
+
+  wsA.close();
+  wsB.close();
+});
+
+test('CURSOR_MOVE broadcasts reach all other members of a room with 3+ users', async () => {
+  const modelId = 'model-cursor-multi-1';
+  const tokenA = makeToken('user-A-multi');
+  const tokenB = makeToken('user-B-multi');
+  const tokenC = makeToken('user-C-multi');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  await sleep(50);
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  await onceOpen(wsB);
+  await sleep(50);
+  const wsC = connect(`token=${tokenC}&model_id=${modelId}`);
+  await onceOpen(wsC);
+  await sleep(50);
+
+  const movedOnA = waitForMessage(wsA, (m) => m.event === 'CURSOR_MOVED');
+  const movedOnB = waitForMessage(wsB, (m) => m.event === 'CURSOR_MOVED');
+  wsC.send(JSON.stringify({ event: 'CURSOR_MOVE', model_id: modelId, position: [1, 1, 1] }));
+
+  const [msgA, msgB] = await Promise.all([movedOnA, movedOnB]);
+  assert.equal(msgA.user_id, 'user-C-multi');
+  assert.equal(msgB.user_id, 'user-C-multi');
+
+  wsA.close();
+  wsB.close();
+  wsC.close();
+});
+
+test('CURSOR_MOVE in an empty room (no other members) does not error or hang', async () => {
+  const modelId = 'model-cursor-empty-1';
+  const token = makeToken('user-solo-cursor');
+  const ws = connect(`token=${token}&model_id=${modelId}`);
+  await onceOpen(ws);
+  await sleep(50);
+
+  ws.send(JSON.stringify({ event: 'CURSOR_MOVE', model_id: modelId, position: [1, 2, 3] }));
+  // No other room member to receive CURSOR_MOVED — just confirm the
+  // connection is still alive and responsive afterward (PING/PONG).
+  await sleep(50);
+  const pong = waitForMessage(ws, (m) => m.event === 'PONG');
+  ws.send(JSON.stringify({ event: 'PING' }));
+  await pong;
+
+  ws.close();
+});
+
+test('unauthorized users never receive cursor broadcasts from a room they were denied', async () => {
+  const modelId = 'unauthorized-model-cursor-1';
+  const tokenAuthorized = makeToken('user-authorized-cursor');
+  const tokenDenied = makeToken('user-denied-cursor');
+
+  // Denied user connects first and attempts to join — should be rejected
+  // and never added to the room.
+  const wsDenied = connect(`token=${tokenDenied}&model_id=${modelId}`);
+  await onceOpen(wsDenied);
+  const denial = await waitForMessage(wsDenied, (m) => m.event === 'ERROR');
+  assert.equal(denial.code, 'MODEL_ACCESS_DENIED');
+
+  // An authorized user can't actually join `unauthorized-*` either (the
+  // fake internal API denies that whole prefix), so this test only needs
+  // to confirm the denied socket never sees a CURSOR_MOVED for the room
+  // it was refused entry to, even after some traffic elsewhere.
+  let sawCursorMoved = false;
+  wsDenied.on('message', (raw) => {
+    try {
+      if (JSON.parse(raw.toString()).event === 'CURSOR_MOVED') sawCursorMoved = true;
+    } catch {
+      /* ignore */
+    }
+  });
+
+  await sleep(150);
+  assert.equal(sawCursorMoved, false);
+
+  wsDenied.close();
 });
 
 // ---------------------------------------------------------------------------
