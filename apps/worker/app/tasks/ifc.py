@@ -297,7 +297,19 @@ def _convert_to_xkt(ifc_path: str, output_dir: str) -> list[str]:
     # Force invocation via 'node' if the binary is the JS script.
     # If the user has a custom binary, we treat it as an executable.
     if convert_bin.endswith(".js") or "convert2xkt.js" in convert_bin:
-        cmd = ["node", convert_bin, "-s", ifc_path, "-o", xkt_out]
+        # --no-experimental-fetch: works around a bug in xeokit-convert's
+        # bundled web-ifc WASM loader (dist/convert2xkt.cjs.js, inside
+        # createWasm()/instantiateAsync()). That loader's streaming-fetch
+        # branch only checks `typeof fetch === "function"` before calling
+        # fetch(wasmBinaryFile, ...) — it's missing the Node/file-URI guard
+        # its own synchronous fallback path has a few lines above. Node 18+
+        # ships a native global `fetch`, so under plain Node this branch now
+        # fires and hands fetch() a bare filesystem path (not a file:// URL),
+        # which throws "Failed to parse URL from .../web-ifc.wasm" (Invalid
+        # URL) — reproduced directly against the installed package. Removing
+        # the global fetch for this subprocess makes the loader correctly
+        # fall back to reading the .wasm file from disk instead.
+        cmd = ["node", "--no-experimental-fetch", convert_bin, "-s", ifc_path, "-o", xkt_out]
     else:
         cmd = [convert_bin, "-s", ifc_path, "-o", xkt_out]
 
