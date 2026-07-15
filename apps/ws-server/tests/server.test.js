@@ -315,6 +315,143 @@ test('ANNOTATION_CREATED is relayed to other room members', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Backend-published room events (apps/api's publish_room_event)
+//
+// The test above only proves client-to-client relay within a single
+// connection's message handler. It never touches the ws:room:* Redis
+// channel at all. Annotation events in production are published by the
+// API service — an HTTP request handler with no open WebSocket connection
+// of its own — via apps.api.app.core.redis.publish_room_event, which
+// publishes directly to `ws:room:{model_id}` with the same
+// {originProcessId, message} envelope used below. This is the actual PRD
+// 6.2 gap (annotation events only reached the acting user's own
+// model_events:{user_id} channel, never other collaborators in the room)
+// and this test is what proves it's actually fixed end-to-end, the same
+// way "MODEL_READY published on model_events:{userId}" proves that path
+// below, rather than only testing the client-relay path above.
+// ---------------------------------------------------------------------------
+
+test('ANNOTATION_CREATED published on ws:room:{model_id} by the API reaches every room member', async () => {
+  const modelId = 'model-annotation-backend-publish-1';
+  const tokenA = makeToken('user-A-backend-annot');
+  const tokenB = makeToken('user-B-backend-annot');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  await onceOpen(wsB);
+  // Wait for both to have actually joined the room (not just opened the
+  // socket) — USER_JOINED on A confirms B's JOIN_MODEL was processed.
+  await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
+
+  const receivedByA = waitForMessage(wsA, (m) => m.event === 'ANNOTATION_CREATED');
+  const receivedByB = waitForMessage(wsB, (m) => m.event === 'ANNOTATION_CREATED');
+
+  // Exactly what apps/api/app/core/redis.py::publish_room_event publishes —
+  // an external process with no PROCESS_ID, so originProcessId is null and
+  // every replica's roomSubscriber delivers it (never skipped as an echo).
+  await publisher.publish(
+    `ws:room:${modelId}`,
+    JSON.stringify({
+      originProcessId: null,
+      message: {
+        event: 'ANNOTATION_CREATED',
+        data: { annotation_id: 'ann-backend-1', model_id: modelId, action: 'created' },
+      },
+    })
+  );
+
+  const [msgA, msgB] = await Promise.all([receivedByA, receivedByB]);
+  assert.equal(msgA.data.annotation_id, 'ann-backend-1');
+  assert.equal(msgB.data.annotation_id, 'ann-backend-1');
+
+  wsA.close();
+  wsB.close();
+});
+
+test('ANNOTATION_UPDATED published on ws:room:{model_id} reaches every room member', async () => {
+  const modelId = 'model-annotation-backend-publish-2';
+  const tokenA = makeToken('user-A-backend-update');
+  const tokenB = makeToken('user-B-backend-update');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  await onceOpen(wsB);
+  await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
+
+  const receivedByB = waitForMessage(wsB, (m) => m.event === 'ANNOTATION_UPDATED');
+
+  await publisher.publish(
+    `ws:room:${modelId}`,
+    JSON.stringify({
+      originProcessId: null,
+      message: {
+        event: 'ANNOTATION_UPDATED',
+        data: { annotation_id: 'ann-backend-2', model_id: modelId, action: 'updated', status: 'resolved' },
+      },
+    })
+  );
+
+  const msgB = await receivedByB;
+  assert.equal(msgB.data.status, 'resolved');
+
+  wsA.close();
+  wsB.close();
+});
+
+test('a room event for a different model_id is NOT delivered to this room', async () => {
+  const modelId = 'model-room-isolated-1';
+  const otherModelId = 'model-room-isolated-2';
+  const tokenA = makeToken('user-room-isolated-A');
+  const tokenB = makeToken('user-room-isolated-B');
+
+  // Two clients in the *target* room, same reliable join-confirmation
+  // pattern as the tests above — a lone client has no signal that its own
+  // JOIN_MODEL room registration finished before publishing could race it.
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  await onceOpen(wsB);
+  await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
+
+  let receivedForeignEvent = false;
+  wsA.on('message', (raw) => {
+    const msg = JSON.parse(raw.toString());
+    if (msg.event === 'ANNOTATION_CREATED' && msg.data?.annotation_id === 'foreign-ann') {
+      receivedForeignEvent = true;
+    }
+  });
+
+  await publisher.publish(
+    `ws:room:${otherModelId}`,
+    JSON.stringify({
+      originProcessId: null,
+      message: { event: 'ANNOTATION_CREATED', data: { annotation_id: 'foreign-ann' } },
+    })
+  );
+
+  // Same deterministic-sentinel pattern as the per-user isolation test
+  // below: publish a second, legitimate event to this room and wait for
+  // it, proving the foreign-room event (published first, same publisher
+  // connection, so ordering is preserved) already had its chance to leak.
+  const sentinel = waitForMessage(wsA, (m) => m.event === 'ANNOTATION_CREATED' && m.data?.annotation_id === 'sentinel');
+  await publisher.publish(
+    `ws:room:${modelId}`,
+    JSON.stringify({
+      originProcessId: null,
+      message: { event: 'ANNOTATION_CREATED', data: { annotation_id: 'sentinel' } },
+    })
+  );
+  await sentinel;
+
+  assert.equal(receivedForeignEvent, false);
+
+  wsA.close();
+  wsB.close();
+});
+
+// ---------------------------------------------------------------------------
 // Client-initiated heartbeat (immediate PING/PONG — no 30s timer involved)
 // ---------------------------------------------------------------------------
 

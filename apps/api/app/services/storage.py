@@ -4,7 +4,7 @@ import re
 import uuid
 
 import boto3
-import filetype
+import magic
 from botocore.config import Config as BotoConfig
 from app.core.celery_client import get_celery_client
 
@@ -15,6 +15,7 @@ ALLOWED_EXTENSIONS = {".ifc", ".gltf", ".glb", ".step", ".stp", ".obj", ".stl"}
 
 ALLOWED_MIME_TYPES = {
     "application/octet-stream",
+    "application/json",  # .gltf (non-binary glTF) is JSON text — see below
     "model/gltf+json",
     "model/gltf-binary",
     "model/step",
@@ -118,14 +119,31 @@ def validate_mime_type_declared(content_type: str) -> None:
 
 
 def validate_mime_type_from_bytes(header_bytes: bytes, declared_filename: str) -> str:
-    guess = filetype.guess(header_bytes)
-    detected = guess.mime if guess is not None else "application/octet-stream"
+    detected = magic.from_buffer(header_bytes, mime=True) if header_bytes else "application/octet-stream"
 
     ext = "." + declared_filename.rsplit(".", 1)[-1].lower()
     text_based_formats = {".ifc", ".step", ".stp", ".obj"}
 
     if ext in text_based_formats:
+        # IFC/STEP/OBJ are plain-text formats and cannot be reliably
+        # fingerprinted from magic bytes — unchanged from before.
         if detected not in ("text/plain", "application/octet-stream"):
+            raise ValidationException(
+                f"File content does not match declared format '{ext}' "
+                f"(detected: {detected})"
+            )
+    elif ext == ".gltf":
+        # .gltf (non-binary glTF) is a JSON document. python-magic
+        # correctly reports this as application/json — the previous
+        # filetype.guess() could not detect JSON at all (it only matches
+        # binary signatures) and always fell back to
+        # application/octet-stream, for valid AND invalid .gltf files
+        # alike. A genuine .gltf file should never produce
+        # application/octet-stream, so — unlike the text-based formats
+        # above — that fallback is intentionally NOT accepted here; doing
+        # so is what makes rejecting a random-bytes file renamed to
+        # .gltf actually possible.
+        if detected not in ("application/json", "text/plain"):
             raise ValidationException(
                 f"File content does not match declared format '{ext}' "
                 f"(detected: {detected})"

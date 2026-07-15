@@ -9,6 +9,7 @@ Covers:
 """
 
 import base64
+import struct
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -205,7 +206,9 @@ class TestValidateMimeDeclared:
 
 class TestValidateMimeFromBytes:
     def test_text_file_bytes_for_ifc(self):
-        # IFC/STEP are ASCII — filetype.guess returns None → octet-stream
+        # IFC/STEP are ASCII text — magic detects text/plain (or, for very
+        # short/ambiguous headers, falls back to application/octet-stream,
+        # which is intentionally still tolerated for these formats).
         header = b"ISO-10303-21;\nHEADER;"
         detected = validate_mime_type_from_bytes(header, "building.ifc")
         assert detected in ("application/octet-stream", "text/plain")
@@ -223,7 +226,79 @@ class TestValidateMimeFromBytes:
             validate_mime_type_from_bytes(png_header, "notreal.ifc")
 
 
-class TestBuildStorageKey:
+class TestValidateMimeFromBytesAllFormats:
+    """
+    Covers all six supported formats plus the required rejection cases.
+
+    Byte fixtures here were verified against the actual `file`/libmagic
+    CLI (the same magic database python-magic's magic.from_buffer uses)
+    before being written into this test, not assumed.
+    """
+
+    def test_ifc_valid(self):
+        header = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((),'');\nENDSEC;\n"
+        validate_mime_type_from_bytes(header, "building.ifc")  # no raise
+
+    def test_step_valid(self):
+        header = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nENDSEC;\n"
+        validate_mime_type_from_bytes(header, "part.step")  # no raise
+
+    def test_obj_valid(self):
+        header = b"# comment\nv 0.0 0.0 0.0\nv 1.0 0.0 0.0\nf 1 2 3\n"
+        validate_mime_type_from_bytes(header, "mesh.obj")  # no raise
+
+    def test_stl_valid_ascii(self):
+        header = b"solid test\nfacet normal 0 0 1\nouter loop\nendloop\nendfacet\nendsolid\n"
+        validate_mime_type_from_bytes(header, "mesh.stl")  # no raise
+
+    def test_stl_valid_binary(self):
+        # Realistic binary STL: 80-byte header + uint32 triangle count +
+        # actual binary float triangle data (a header of only zero-padding
+        # is not representative — real triangle data is what confirms
+        # magic can't fingerprint this format, matching the tolerant
+        # octet-stream branch it shares with IFC/STEP/OBJ).
+        header = b"binary stl test" + b"\x00" * (80 - len(b"binary stl test"))
+        count = struct.pack("<I", 1)
+        triangle = struct.pack("<3f", 0.0, 0.0, 1.0) + struct.pack(
+            "<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0
+        ) + struct.pack("<H", 0)
+        validate_mime_type_from_bytes(header + count + triangle, "mesh.stl")  # no raise
+
+    def test_gltf_valid_json(self):
+        header = b'{"asset":{"version":"2.0"},"scenes":[]}'
+        detected = validate_mime_type_from_bytes(header, "model.gltf")
+        assert detected == "application/json"
+
+    def test_glb_valid(self):
+        # Real GLB magic header: "glTF" + version(u32 LE) + total length(u32 LE)
+        # + a minimal JSON chunk, matching the actual glTF binary spec.
+        json_chunk = b'{"asset":{"version":"2.0"}}'
+        while len(json_chunk) % 4 != 0:
+            json_chunk += b" "
+        header = struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(json_chunk))
+        chunk_header = struct.pack("<II", len(json_chunk), 0x4E4F534A)
+        validate_mime_type_from_bytes(header + chunk_header + json_chunk, "model.glb")  # no raise
+
+    def test_renamed_file_rejected(self):
+        # Real glTF JSON content saved with a .ifc extension must be
+        # rejected — IFC's tolerant branch only accepts text/plain or
+        # application/octet-stream, and valid JSON detects as
+        # application/json, which is neither.
+        header = b'{"asset":{"version":"2.0"}}'
+        with pytest.raises(ValidationException):
+            validate_mime_type_from_bytes(header, "fake.ifc")
+
+    def test_random_bytes_rejected_for_gltf(self):
+        # .gltf is the one format where random-byte rejection is fully
+        # enforceable: a genuine .gltf must be valid JSON text, so the
+        # generic "unrecognized binary" fallback is deliberately not
+        # tolerated for this extension (see validate_mime_type_from_bytes).
+        random_bytes = bytes(range(256))
+        with pytest.raises(ValidationException):
+            validate_mime_type_from_bytes(random_bytes, "malicious.gltf")
+
+
+
     def test_key_format(self):
         user_id = uuid.UUID("aaaabbbb-aaaa-bbbb-aaaa-bbbbaaaabbbb")
         model_id = uuid.UUID("ccccdddd-cccc-dddd-cccc-ddddccccdddd")

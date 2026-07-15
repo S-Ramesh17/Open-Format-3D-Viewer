@@ -16,7 +16,7 @@ from app.schemas.annotations import (
     CommentCreate,
     CommentResponse,
 )
-from app.core.redis import publish_model_event
+from app.core.redis import publish_model_event, publish_room_event
 from app.services.webhooks import dispatch_event
 
 
@@ -60,6 +60,11 @@ async def create_annotation(
 
     await publish_model_event(
         str(user_id),
+        "ANNOTATION_CREATED",
+        {"annotation_id": str(annotation.id), "model_id": str(model_id), "action": "created"},
+    )
+    await publish_room_event(
+        str(model_id),
         "ANNOTATION_CREATED",
         {"annotation_id": str(annotation.id), "model_id": str(model_id), "action": "created"},
     )
@@ -144,6 +149,11 @@ async def update_annotation(
 
     await publish_model_event(
         str(annotation.author_id),
+        "ANNOTATION_UPDATED",
+        {"annotation_id": str(annotation.id), "model_id": str(annotation.model_id), "action": "updated", "status": annotation.status},
+    )
+    await publish_room_event(
+        str(annotation.model_id),
         "ANNOTATION_UPDATED",
         {"annotation_id": str(annotation.id), "model_id": str(annotation.model_id), "action": "updated", "status": annotation.status},
     )

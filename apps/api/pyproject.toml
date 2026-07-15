@@ -46,7 +46,7 @@ pydantic          = { extras = ["email"], version = "^2.10.0" }
 pydantic-settings = "^2.7.0"
 bleach            = "^6.2.0"    # sanitize.py: bleach.clean()
 httpx             = "^0.28.0"   # used in tests & OAuth callbacks
-filetype          = "^1.2.0"    # storage.py: filetype.guess()
+python-magic      = "^0.4.27"   # storage.py: magic.from_buffer(..., mime=True) — requires system libmagic1 (already in Dockerfile)
 itsdangerous      = "^2.2.0"    # starlette SessionMiddleware indirect dep — keep explicit
 bcrypt = "4.0.1"
 

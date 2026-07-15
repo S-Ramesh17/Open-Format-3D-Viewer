@@ -100,3 +100,43 @@ async def publish_model_event(user_id: str, event: str, data: dict) -> None:
             "publish_model_event failed user_id=%s event=%s: %s",
             user_id, event, exc,
         )
+
+
+ROOM_CHANNEL_PREFIX = "ws:room:"
+
+
+async def publish_room_event(model_id: str, event: str, data: dict) -> None:
+    """
+    Broadcast a real-time event to every client in a model's collaboration
+    room (apps/ws-server's `rooms.get(model_id)`), not just one user.
+
+    Consumed by apps/ws-server's process-wide room subscriber
+    (`roomSubscriber.psubscribe('ws:room:*')`), which fans this out to
+    every connected replica and delivers it to each locally-connected
+    room member. The envelope shape — {"originProcessId": ..., "message":
+    {...}} — matches exactly what ws-server's own broadcast() function
+    publishes when relaying a client-originated event, so an externally
+    published event (from this API process, which has no PROCESS_ID of
+    its own) is never mistaken for a replica's own echo and is always
+    delivered.
+
+    Use this for events every collaborator viewing the model must see
+    (e.g. ANNOTATION_CREATED/UPDATED). Use publish_model_event for events
+    scoped to a single user (e.g. MODEL_READY, MODEL_PROCESSING) — both
+    can fire for the same action; this doesn't replace that.
+
+    Failures are logged but never propagated, same as publish_model_event.
+    """
+    try:
+        redis = await get_redis()
+        channel = f"{ROOM_CHANNEL_PREFIX}{model_id}"
+        envelope = _json.dumps(
+            {"originProcessId": None, "message": {"event": event, "data": data}}
+        )
+        await redis.publish(channel, envelope)
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "publish_room_event failed model_id=%s event=%s: %s",
+            model_id, event, exc,
+        )
