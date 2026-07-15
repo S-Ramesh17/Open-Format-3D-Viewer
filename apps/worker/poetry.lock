@@ -111,6 +111,55 @@ urllib3 = ">=1.25.4,<2.2.0 || >2.2.0,<3"
 crt = ["awscrt (==0.32.2)"]
 
 [[package]]
+name = "cadquery-ocp-novtk"
+version = "7.9.3.1.1"
+description = "Python wrapper for Open CASCADE Technology 3D geometry library based on the official CadQuery/OCP sources (no VTK support)"
+optional = false
+python-versions = "<3.15,>=3.10"
+groups = ["main"]
+files = [
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:cee061a62066e58b366d1b0647d7148ffa2b3a7cec08e0e612a59a25b019791a"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp310-cp310-macosx_11_0_x86_64.whl", hash = "sha256:13e33a0c86171e517a3f5d6e191322ec8e69916051fd224ca78b6cc0e49878a7"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp310-cp310-manylinux_2_31_aarch64.whl", hash = "sha256:50b269de006ad2cdb1e3ffd5740fdf1d3920913352ece0b68f6f6d4fcb6dfdc7"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp310-cp310-manylinux_2_31_x86_64.whl", hash = "sha256:235c66c8e0a793ae329a4c22e2f63b80a3a706494b431ec4f9608f69ee7c9664"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp310-cp310-win_amd64.whl", hash = "sha256:db50a67cb2a0976200526aa12d2ca5ca331d2e8b27f9c7f2ba688aa8d624af23"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:2dc157f6ff3ecf28f1b1b43daa908b79a2f934b2d26390e40a04d9ed38387527"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp311-cp311-macosx_11_0_x86_64.whl", hash = "sha256:7eb101093a84bbbbc40d93a4f8726ae3b14f85b49d0087212efe3afdea69c852"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp311-cp311-manylinux_2_31_aarch64.whl", hash = "sha256:0b566f9e00f0e4255996b2bcb18b580dc758f451fd2b7546542fae08261db535"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp311-cp311-manylinux_2_31_x86_64.whl", hash = "sha256:860649d3d2c2d43eb2068ff604bce198dbebf402eedae496829d12de4107a2f5"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp311-cp311-win_amd64.whl", hash = "sha256:46ca650c78372a05d91db79c66a4f28d5cd7ec674f5347ddbf94e927ef6e4090"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:50931ba2d20aa57d5e3fe2bac790093fc65c8257f7899ec5071b9e8d13dbf4bd"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp312-cp312-macosx_11_0_x86_64.whl", hash = "sha256:17f707744671367a20271fc10826d1ff13ebb835345288c9377d10cd7768eeca"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp312-cp312-manylinux_2_31_aarch64.whl", hash = "sha256:847ce78339ce2860f25a3d3109852c9c7746f4450293f359f69ecaa57967752f"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp312-cp312-manylinux_2_31_x86_64.whl", hash = "sha256:60497cf42419dd2000d323ab772937f61539f2f0a5d3ef1b288611b13254c587"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp312-cp312-win_amd64.whl", hash = "sha256:5d22339cdaac64c396f0658de8728915acfac9b868406f0078e52f50a3c25c65"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:2287812f213af7020f8bbc69b07d6039e529f5e0e154c0192221aff3fdac6676"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-macosx_11_0_x86_64.whl", hash = "sha256:e2969d2129bf21067f44953117cc18f1426f5aacaed8bcc074228eb50f3179b2"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-manylinux_2_31_aarch64.whl", hash = "sha256:d8f68b05c2917fb0f5ea569ed88c697d47cc57a7b293929d863b52c99ace9312"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-manylinux_2_31_x86_64.whl", hash = "sha256:ffcd04d4efa087d3aa942360020265a1ac0e12407bd7bcfeb37e70b4d1ee72df"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp313-cp313-win_amd64.whl", hash = "sha256:3390be6d8199a50b01ae0137a60f56d0cfecd8753dbee08532bbbeb8b7169682"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:ce1f014fc4a88b3d45bf7560a5e276fb30ed4edd3d788760512b1af49eb13041"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp314-cp314-macosx_11_0_x86_64.whl", hash = "sha256:4609e82725cd52015167d14d930d8ead437465c39136581694fe97c8965ab0ee"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp314-cp314-manylinux_2_31_aarch64.whl", hash = "sha256:6c0135fee7e5f215b42178d65d448dd795317f523827031823cfa56529bf5ca1"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp314-cp314-manylinux_2_31_x86_64.whl", hash = "sha256:156dd9233d90b520103d9dc7c8854ba0b9e891b4f6e604546cde20a795122247"},
+    {file = "cadquery_ocp_novtk-7.9.3.1.1-cp314-cp314-win_amd64.whl", hash = "sha256:eabb9e4eceb4d44b1555981aec8821c3b133300ed4a3929e4fea4510b6737cd5"},
+]
+
+[package.dependencies]
+cadquery-ocp-proxy = "7.9.3.1.1"
+
+[[package]]
+name = "cadquery-ocp-proxy"
+version = "7.9.3.1.1"
+description = "Proxy package to track cadquery_ocp / cadquery_ocp_novtk version"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "cadquery_ocp_proxy-7.9.3.1.1-py3-none-any.whl", hash = "sha256:ca4164ec4b54956d9fc3e68c67d555b5486cb963c2f71e18df005ba16b921c91"},
+]
+
+[[package]]
 name = "celery"
 version = "5.6.3"
 description = "Distributed Task Queue."
@@ -2682,4 +2731,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "2fe0924cd887ce3af2b059579a066a0274d37fafecdea763de52cff00a041d15"
+content-hash = "f645eb69b9ff188fe748fca013984faa6b4913be05da0575e07e5fc722385c31"

@@ -37,9 +37,21 @@ numpy             = ">=1.26.0,<3.0.0"
 
 # ─── NOT pip-installable — install outside Poetry ───────────────────────────
 # ifcopenshell  → conda-forge or custom .whl (see Render deployment notes)
-# pythonocc-core → conda-forge or custom .whl
 # gltf-pipeline, gltf-validator, xeokit-convert → npm install -g (see build cmd)
 ifcopenshell = "^0.8.5"
+
+# STEP pipeline — OCCT Python bindings.
+# NOTE: pythonocc-core (the package step.py's error messages historically
+# referenced) has no current PyPI wheel — its PyPI page is a stale, abandoned
+# 0.16 release from 2021; the only maintained pythonocc-core distribution
+# channel is conda-forge, which doesn't cross-copy cleanly into this
+# python:3.12-slim (Debian) image. cadquery-ocp-novtk wraps the same OCCT
+# library and publishes real, current, manylinux_2_31 wheels for cp312 on
+# PyPI — genuinely pip-installable, no conda required. Its Python import
+# namespace is `OCP.*`, not `OCC.Core.*` — apps/worker/app/tasks/step.py's
+# imports were updated to match (same OCCT classes/call signatures, only
+# the binding's module path differs).
+cadquery-ocp-novtk = "^7.9.3.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest         = "^8.3.0"

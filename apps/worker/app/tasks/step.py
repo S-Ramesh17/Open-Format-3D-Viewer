@@ -67,12 +67,12 @@ def _read_step(step_path: str) -> Any:
     transferred (corrupt / empty STEP).
     """
     try:
-        from OCC.Core.STEPControl import STEPControl_Reader  # type: ignore
-        from OCC.Core.IFSelect import IFSelect_RetDone         # type: ignore
+        from OCP.STEPControl import STEPControl_Reader  # type: ignore
+        from OCP.IFSelect import IFSelect_RetDone         # type: ignore
     except ImportError:
         raise RuntimeError(
-            "pythonOCC-core is not installed. "
-            "Install: conda install -c conda-forge pythonocc-core=7.7.2"
+            "OCCT Python bindings are not installed. "
+            "Expected the 'cadquery-ocp-novtk' package (see apps/worker/Dockerfile)."
         )
 
     reader = STEPControl_Reader()
@@ -104,9 +104,9 @@ def _mesh_shape(shape: Any, linear_deflection: float = 0.1, angular_deflection: 
         BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5)
     """
     try:
-        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh  # type: ignore
+        from OCP.BRepMesh import BRepMesh_IncrementalMesh  # type: ignore
     except ImportError:
-        raise RuntimeError("pythonOCC-core is not installed")
+        raise RuntimeError("OCCT Python bindings are not installed (expected 'cadquery-ocp-novtk')")
 
     mesh = BRepMesh_IncrementalMesh(shape, linear_deflection, False, angular_deflection)
     mesh.Perform()
@@ -124,37 +124,47 @@ def _mesh_shape(shape: Any, linear_deflection: float = 0.1, angular_deflection: 
 def _export_gltf(shape: Any, output_path: str) -> None:
     """
     Export a tessellated TopoDS_Shape to a GLTF file using RWGltf_CafWriter.
-    The shape is first placed into an XDE document (TDocStd_Document) as
-    required by the OCCT GLTF writer API.
     """
     try:
-        from OCC.Core.RWGltf import RWGltf_CafWriter                # type: ignore
-        from OCC.Core.TDocStd import TDocStd_Document                # type: ignore
-        from OCC.Core.TCollection import TCollection_ExtendedString   # type: ignore
-        from OCC.Core.XCAFDoc import XCAFDoc_DocumentTool             # type: ignore
-        from OCC.Core.XCAFApp import XCAFApp_Application              # type: ignore
-        from OCC.Core.TDF import TDF_LabelSequence                    # type: ignore
-        from OCC.Core.TCollection import TCollection_AsciiString      # type: ignore
+        from OCP.RWGltf import RWGltf_CafWriter                # type: ignore
+        from OCP.TDocStd import TDocStd_Document                # type: ignore
+        from OCP.TCollection import TCollection_ExtendedString   # type: ignore
+        from OCP.XCAFDoc import XCAFDoc_DocumentTool             # type: ignore
+        from OCP.XCAFApp import XCAFApp_Application              # type: ignore
+        from OCP.TDF import TDF_LabelSequence                    # type: ignore
+        from OCP.TCollection import TCollection_AsciiString      # type: ignore
     except ImportError:
-        raise RuntimeError("pythonOCC-core is not installed")
+        raise RuntimeError("OCCT Python bindings are not installed (expected 'cadquery-ocp-novtk')")
 
-    # Create an XDE application + document
-    app = XCAFApp_Application.GetApplication()
+    # 1. Use the _s suffix for the static Application retrieval
+    app = XCAFApp_Application.GetApplication_s()
     doc = TDocStd_Document(TCollection_ExtendedString("MDTV-CAF"))
     app.NewDocument(TCollection_ExtendedString("MDTV-CAF"), doc)
 
-    # Add shape to the XDE shape tool
-    shape_tool = XCAFDoc_DocumentTool.ShapeTool(doc.Main())
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
     shape_tool.AddShape(shape)
 
-    # Write GLTF
-    writer = RWGltf_CafWriter(TCollection_AsciiString(output_path), False)  # False = .gltf (JSON)
-    labels = TDF_LabelSequence()
-    shape_tool.GetFreeShapes(labels)
+    # color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
 
-    result = writer.Perform(doc, labels, None)  # type: ignore[arg-type]
+    ## ... inside _export_gltf ...
+    from OCP.TColStd import TColStd_MapOfAsciiString, TColStd_IndexedDataMapOfStringString
+    from OCP.Message import Message_ProgressRange
+
+    # Write GLTF
+    writer = RWGltf_CafWriter(TCollection_AsciiString(output_path), False)
+    labels = TDF_LabelSequence()
+    shape_tool.GetFreeShapes(labels) # Use static accessor _s
+
+    # Initialize required collections for the signature
+    label_filter = TColStd_MapOfAsciiString()
+    file_info = TColStd_IndexedDataMapOfStringString()
+    progress = Message_ProgressRange()
+
+    # Call with full signature
+    result = writer.Perform(doc, labels, label_filter, file_info, progress)
+    
     if not result:
-        raise RuntimeError(f"RWGltf_CafWriter.Perform() failed for output: {output_path}")
+        raise RuntimeError(f"RWGltf_CafWriter.Perform() failed")
 
     logger.info("[STEP] GLTF exported → %s (%.1f KB)", output_path, Path(output_path).stat().st_size / 1024)
 
@@ -202,8 +212,8 @@ def _compress_with_draco(gltf_path: str, output_dir: str, compression_level: int
 def _collect_step_geometry_stats(shape: Any) -> dict:
     """Return basic shape statistics for metadata storage."""
     try:
-        from OCC.Core.TopExp import TopExp_Explorer     # type: ignore
-        from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX  # type: ignore
+        from OCP.TopExp import TopExp_Explorer     # type: ignore
+        from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX  # type: ignore
 
         face_exp = TopExp_Explorer(shape, TopAbs_FACE)
         faces = 0

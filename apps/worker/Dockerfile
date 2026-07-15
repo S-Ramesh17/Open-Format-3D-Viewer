@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     nodejs \
     npm \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install poetry==1.8.3 --no-cache-dir
@@ -14,6 +15,20 @@ RUN pip install poetry==1.8.3 --no-cache-dir
 COPY pyproject.toml poetry.lock ./
 RUN poetry config virtualenvs.create false \
     && poetry install --only main --no-interaction --no-ansi
+
+# Build-time self-test for the STEP pipeline's OCCT bindings. cadquery-ocp-novtk
+# is a genuinely different Python package from pythonocc-core (same underlying
+# OCCT library, different Python wrapper/namespace) — this import list must
+# match apps/worker/app/tasks/step.py's actual `from OCP.X import Y` lines
+# exactly. If OCCT's module coverage differs from what's assumed here (e.g.
+# RWGltf not wrapped in this build), this fails the build immediately with a
+# clear message instead of shipping an image where STEP uploads silently fail
+# at runtime — same reasoning as the xeokit-convert self-test below.
+RUN python3 -c "\
+import OCP.STEPControl, OCP.IFSelect, OCP.BRepMesh, OCP.RWGltf, \
+       OCP.TDocStd, OCP.TCollection, OCP.XCAFDoc, OCP.XCAFApp, \
+       OCP.TDF, OCP.TopExp, OCP.TopAbs; \
+print('OCP import self-test OK — all step.py-required submodules present')"
 
 COPY app/ ./app/
 
@@ -28,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     gosu \
     xz-utils \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- gltf-pipeline: Draco compression for GLTF/STEP pipelines ---
