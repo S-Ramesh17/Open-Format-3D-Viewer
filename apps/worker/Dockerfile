@@ -39,11 +39,28 @@ RUN npm install -g gltf-pipeline
 # `node <path>/convert2xkt.js`. Worker code (app/config.py::XEOKIT_CONVERT_BIN,
 # default "xeokit-convert") expects a bare command on PATH, so install the
 # package and generate a thin shim rather than changing application code.
-RUN npm install -g @xeokit/xeokit-convert \
+#
+# Version pinned (previously unpinned, unlike gltf-validator below) —
+# an unpinned `npm install -g` here means a future `latest` publish could
+# silently change what gets installed between builds, with no way to tell
+# from the Dockerfile alone. Confirm this version against the actual
+# registry before relying on it; it's a placeholder pin, not a verified one.
+ARG XEOKIT_CONVERT_VERSION=1.0.6
+RUN npm install -g "@xeokit/xeokit-convert@${XEOKIT_CONVERT_VERSION}" \
     && CONVERT2XKT="$(npm root -g)/@xeokit/xeokit-convert/convert2xkt.js" \
     && test -f "$CONVERT2XKT" \
-    && printf '#!/bin/sh\nexec node "%s" "$@"\n' "$CONVERT2XKT" > /usr/local/bin/xeokit-convert \
-    && chmod +x /usr/local/bin/xeokit-convert
+    # Build-time self-test: if convert2xkt.js is actually a broken/stub
+    # file (the exact failure mode this comment block exists to explain),
+    # `node convert2xkt.js` fails on argument parsing or a syntax error
+    # immediately here — the build stops with a clear message instead of
+    # shipping a worker image that fails silently on the first real upload.
+    && (node "$CONVERT2XKT" --help > /tmp/xeokit_selftest.log 2>&1 || true) \
+    && grep -qi "usage\|xkt\|options" /tmp/xeokit_selftest.log || \
+       (echo "FATAL: xeokit-convert self-test failed — convert2xkt.js did not" \
+             "produce expected --help output. Contents of $CONVERT2XKT:" \
+        && cat "$CONVERT2XKT" \
+        && exit 1) \
+    && rm -f /tmp/xeokit_selftest.log
 
 # --- gltf-validator: native Dart-compiled CLI, NOT the npm library -------
 # The npm package "gltf-validator" is a JS *library* (validator.validateBytes),
