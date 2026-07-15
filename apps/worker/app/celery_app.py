@@ -1,10 +1,20 @@
-# app/celery_app.py
 from celery import Celery
 from app.config import settings
 import importlib
 import os
 
 from celery.signals import worker_process_init, worker_process_shutdown, celeryd_after_setup
+
+# Registers app/logging.py's @worker_ready.connect listener (which starts
+# the Prometheus metrics HTTP server on WORKER_METRICS_PORT). Must happen
+# at module import time, in every process that loads this file — including
+# Celery's main/parent process, which is the ONLY process worker_ready
+# actually fires in. The lazy `from app.logging import ...` below (inside
+# _configure_worker_logging, triggered by worker_process_init) only runs
+# in forked prefork children, which never see worker_ready themselves —
+# that left the metrics server's start trigger permanently unregistered
+# in the one process where it mattered.
+import app.logging  # noqa: E402, F401
 
 celery_app = Celery(
     "openformat_worker",
