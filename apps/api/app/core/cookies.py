@@ -3,6 +3,7 @@ from datetime import timedelta
 from fastapi import Response
 
 from app.config import settings
+from app.core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
 
 ACCESS_TOKEN_COOKIE = "access_token"
 REFRESH_TOKEN_COOKIE = "refresh_token"
@@ -18,7 +19,11 @@ def _is_secure() -> bool:
 
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
     """
-    Set both auth cookies on the response.
+    Set both auth cookies on the response, plus a fresh CSRF cookie for
+    this new/rotated session (register, login, refresh, and the OAuth
+    callback are the only places a session begins or is rotated — see
+    app/core/csrf.py for why the CSRF cookie is tied to this same
+    lifecycle rather than issued separately).
     access_token: available on all paths, expires in 1 hour.
     refresh_token: scoped to /v1/auth only, expires in 30 days.
     """
@@ -46,11 +51,12 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
         samesite=samesite,
         path="/v1/auth",
     )
+    set_csrf_cookie(response, generate_csrf_token())
 
 
 def clear_auth_cookies(response: Response) -> None:
     """
-    Clear both auth cookies.
+    Clear both auth cookies, plus the CSRF cookie.
     Must mirror the same secure/samesite/path attributes used when setting,
     otherwise browsers ignore the deletion.
     """
@@ -71,3 +77,4 @@ def clear_auth_cookies(response: Response) -> None:
         secure=secure,
         samesite=samesite,
     )
+    clear_csrf_cookie(response)

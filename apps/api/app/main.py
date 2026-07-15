@@ -7,6 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.db.engine import AsyncSessionLocal
 from app.middleware.auth_middleware import AuthMiddleware
+from app.middleware.csrf_middleware import CSRFMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
@@ -111,7 +112,13 @@ if _PROMETHEUS_AVAILABLE:
 # runs FIRST on every request. To make RateLimitMiddleware wrap (and run
 # before) AuthMiddleware — so failed/blocked auth attempts are still
 # counted against the per-IP rate limit — Auth must be added first and
-# RateLimit added after it.
+# RateLimit added after it. CSRFMiddleware is added even before
+# AuthMiddleware so it becomes the innermost layer of all, running
+# immediately after AuthMiddleware has resolved request.state.auth_via_cookie
+# and right before the route itself — it needs that flag to distinguish a
+# cookie-authenticated browser request (CSRF applies) from a Bearer-token
+# request (CSRF bypassed entirely).
+app.add_middleware(CSRFMiddleware)
 app.add_middleware(AuthMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)

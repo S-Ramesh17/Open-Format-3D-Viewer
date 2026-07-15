@@ -57,6 +57,13 @@ async def _make_viewer_client(
     transport = ASGITransport(app=app)
     viewer_client = AsyncClient(transport=transport, base_url="https://testserver")
 
+    async def _attach_csrf_header(request):
+        csrf_value = viewer_client.cookies.get("csrf_token")
+        if csrf_value:
+            request.headers["X-CSRF-Token"] = csrf_value
+
+    viewer_client.event_hooks["request"] = [_attach_csrf_header]
+
     reg = await viewer_client.post(
         "/v1/auth/register",
         json={"email": email, "password": "testpass123", "name": "Viewer"},
@@ -244,6 +251,13 @@ class TestEditorCanWrite:
     ) -> AsyncClient:
         transport = ASGITransport(app=app)
         editor_client = AsyncClient(transport=transport, base_url="https://testserver")
+
+        async def _attach_csrf_header(request):
+            csrf_value = editor_client.cookies.get("csrf_token")
+            if csrf_value:
+                request.headers["X-CSRF-Token"] = csrf_value
+
+        editor_client.event_hooks["request"] = [_attach_csrf_header]
 
         reg = await editor_client.post(
             "/v1/auth/register",

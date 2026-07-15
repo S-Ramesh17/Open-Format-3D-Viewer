@@ -48,6 +48,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         token = None
         is_api_key = False
+        auth_via_cookie = False
 
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
@@ -55,6 +56,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             is_api_key = token.startswith("ofv_")
         else:
             token = request.cookies.get(ACCESS_TOKEN_COOKIE)
+            auth_via_cookie = token is not None
 
         if not token:
             return _unauthorized("Authentication required")
@@ -65,6 +67,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # presence of a credential to block fully anonymous requests.
             request.state.auth_token = token
             request.state.auth_is_api_key = True
+            request.state.auth_via_cookie = False
             return await call_next(request)
 
         try:
@@ -82,6 +85,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.user_id = user_id
         request.state.auth_token = token
         request.state.auth_is_api_key = False
+        request.state.auth_via_cookie = auth_via_cookie
 
         return await call_next(request)
 

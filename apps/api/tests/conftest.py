@@ -36,7 +36,7 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     """
     httpx AsyncClient wired directly to the FastAPI ASGI app —
     no real network/socket needed. Reuses the app's actual middleware
-    stack (CORS, rate limiting, auth, security headers) exactly as
+    stack (CORS, rate limiting, auth, CSRF, security headers) exactly as
     deployed, so integration tests exercise the real request pipeline.
 
     base_url MUST be https:// — auth cookies are set with Secure=True
@@ -46,9 +46,22 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     so an http://testserver base_url silently breaks cookie persistence
     between requests in tests, even though the server-side Set-Cookie
     logic is correct.
+
+    A request event hook auto-echoes the csrf_token cookie (set by
+    set_auth_cookies() on register/login/refresh/oauth-callback) into the
+    X-CSRF-Token header on every outgoing request — this is exactly what
+    a real browser-based JS client is expected to do for the Double
+    Submit Cookie pattern (see app/core/csrf.py), and doing it here once
+    means no individual test needs to know CSRF exists.
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="https://testserver") as ac:
+        async def _attach_csrf_header(request):
+            csrf_value = ac.cookies.get("csrf_token")
+            if csrf_value:
+                request.headers["X-CSRF-Token"] = csrf_value
+
+        ac.event_hooks["request"] = [_attach_csrf_header]
         yield ac
 
 @pytest.fixture
