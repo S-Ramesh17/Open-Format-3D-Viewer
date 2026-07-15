@@ -282,10 +282,18 @@ def process_stl(self: Task, model_id: str) -> dict:
     file_size_bytes = model.get("file_size_bytes") or 0
     if file_size_bytes > max_bytes:
         from app.tasks.error_handler import FileTooLargeError
-        raise FileTooLargeError(
+
+        exc = FileTooLargeError(
             f"File size {file_size_bytes / 1024 / 1024:.1f} MB exceeds "
             f"{plan or 'free'} plan limit of {max_bytes / 1024 / 1024:.0f} MB"
         )
+        # Runs before the tempfile/download try-block below, so nothing
+        # catches a raised exception here — it would previously propagate
+        # out of the task entirely, skipping handle_task_failure() and
+        # leaving the model stuck in "processing" forever.
+        result = handle_task_failure(engine, model_id, user_id, "size_check", exc)
+        release_task_lock(model_id, "app.tasks.stl.process_stl")
+        return result
 
     with tempfile.TemporaryDirectory(prefix="stl_") as tmpdir:
         stl_local = os.path.join(tmpdir, "input.stl")

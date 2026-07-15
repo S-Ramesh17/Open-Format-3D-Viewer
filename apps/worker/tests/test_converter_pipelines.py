@@ -166,15 +166,16 @@ class TestConverterPlanFileSizeLimit:
          second, on-disk check after the actual download, catching any
          mismatch between the DB-recorded size and the real file.
 
-    Both raise FileTooLargeError uncaught (verified directly against the
-    source — the pre-download raise happens outside any try/except in these
-    functions, so Celery's eager .get() re-raises it rather than returning
-    a result dict). NOTE: neither check calls update_model_status() before
-    raising, so a rejected upload's DB row is never marked "failed" — the
-    task just dies with an unhandled exception. That's a real gap (worth
-    fixing so rejected models don't get stuck in "processing" forever), but
-    it doesn't stop the guard itself from correctly rejecting oversized
-    files, so it's out of scope for this test suite and flagged separately.
+    Both go through handle_task_failure() (verified below) — model status
+    becomes "failed" with a stored reason, and the same MODEL_FAILED-style
+    Redis notification used by every other worker failure fires. This was
+    NOT previously true for the pre-download check: it used to raise
+    FileTooLargeError past every try/except in these functions (the check
+    runs before the tempfile/download block that contains the only
+    exception handler), so Celery's eager .get() would re-raise it and the
+    model's DB row was left stuck in "processing" forever with no
+    MODEL_FAILED notification. Fixed by routing that raise through
+    handle_task_failure() directly instead of letting it propagate.
     """
 
     def _unlocked_ready_redis(self) -> MagicMock:
@@ -202,35 +203,55 @@ class TestConverterPlanFileSizeLimit:
 
     @pytest.mark.parametrize("task,mod", CONVERTERS, ids=[m for _, m in CONVERTERS])
     def test_free_plan_rejected_above_50mb(self, task, mod):
-        from app.tasks.error_handler import FileTooLargeError
-
         model_id = str(uuid.uuid4())
         row = self._model_row(model_id, plan="free", file_size_bytes=60 * 1024 * 1024)
+        mock_handle_failure = MagicMock(
+            return_value={"model_id": model_id, "status": "failed", "error": "too large"}
+        )
 
         with patch(f"{mod}.get_sync_engine"), \
              patch(f"{mod}.get_model_row", return_value=row), \
              patch(f"{mod}.download_raw_file") as mock_download, \
+             patch(f"{mod}.handle_task_failure", mock_handle_failure), \
              patch("redis.from_url", return_value=self._unlocked_ready_redis()):
-            with pytest.raises(FileTooLargeError):
-                task.apply(args=[model_id]).get()
+            result = task.apply(args=[model_id]).get()
 
+        # Must be caught and routed through handle_task_failure(), not raised
+        # past the task boundary — a raised exception here previously left
+        # the model stuck in "processing" with no MODEL_FAILED notification.
         mock_download.assert_not_called()
+        mock_handle_failure.assert_called_once()
+        call_args = mock_handle_failure.call_args.args
+        # (engine, model_id, user_id, stage, exc)
+        assert call_args[1] == model_id
+        assert call_args[3] == "size_check"
+        from app.tasks.error_handler import FileTooLargeError
+        assert isinstance(call_args[4], FileTooLargeError)
+        assert result == mock_handle_failure.return_value
 
     @pytest.mark.parametrize("task,mod", CONVERTERS, ids=[m for _, m in CONVERTERS])
     def test_pro_plan_rejected_above_500mb(self, task, mod):
-        from app.tasks.error_handler import FileTooLargeError
-
         model_id = str(uuid.uuid4())
         row = self._model_row(model_id, plan="pro", file_size_bytes=600 * 1024 * 1024)
+        mock_handle_failure = MagicMock(
+            return_value={"model_id": model_id, "status": "failed", "error": "too large"}
+        )
 
         with patch(f"{mod}.get_sync_engine"), \
              patch(f"{mod}.get_model_row", return_value=row), \
              patch(f"{mod}.download_raw_file") as mock_download, \
+             patch(f"{mod}.handle_task_failure", mock_handle_failure), \
              patch("redis.from_url", return_value=self._unlocked_ready_redis()):
-            with pytest.raises(FileTooLargeError):
-                task.apply(args=[model_id]).get()
+            result = task.apply(args=[model_id]).get()
 
         mock_download.assert_not_called()
+        mock_handle_failure.assert_called_once()
+        call_args = mock_handle_failure.call_args.args
+        assert call_args[1] == model_id
+        assert call_args[3] == "size_check"
+        from app.tasks.error_handler import FileTooLargeError
+        assert isinstance(call_args[4], FileTooLargeError)
+        assert result == mock_handle_failure.return_value
 
     @pytest.mark.parametrize("task,mod", CONVERTERS, ids=[m for _, m in CONVERTERS])
     def test_pro_plan_499mb_allowed(self, task, mod):
@@ -270,19 +291,27 @@ class TestConverterPlanFileSizeLimit:
     def test_unknown_plan_defaults_to_free(self, task, mod):
         """An unrecognized plan value must fall back to the most
         restrictive (free) limit, not the most permissive."""
-        from app.tasks.error_handler import FileTooLargeError
-
         model_id = str(uuid.uuid4())
         row = self._model_row(model_id, plan="not_a_real_plan", file_size_bytes=60 * 1024 * 1024)
+        mock_handle_failure = MagicMock(
+            return_value={"model_id": model_id, "status": "failed", "error": "too large"}
+        )
 
         with patch(f"{mod}.get_sync_engine"), \
              patch(f"{mod}.get_model_row", return_value=row), \
              patch(f"{mod}.download_raw_file") as mock_download, \
+             patch(f"{mod}.handle_task_failure", mock_handle_failure), \
              patch("redis.from_url", return_value=self._unlocked_ready_redis()):
-            with pytest.raises(FileTooLargeError):
-                task.apply(args=[model_id]).get()
+            result = task.apply(args=[model_id]).get()
 
         mock_download.assert_not_called()
+        mock_handle_failure.assert_called_once()
+        call_args = mock_handle_failure.call_args.args
+        assert call_args[1] == model_id
+        assert call_args[3] == "size_check"
+        from app.tasks.error_handler import FileTooLargeError
+        assert isinstance(call_args[4], FileTooLargeError)
+        assert result == mock_handle_failure.return_value
 
     # ------------------------------------------------------------------
     # Post-download check

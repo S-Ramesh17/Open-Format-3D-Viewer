@@ -219,10 +219,18 @@ def process_obj(self: Task, model_id: str) -> dict:
     file_size_bytes = model.get("file_size_bytes") or 0
     if file_size_bytes > max_bytes:
         from app.tasks.error_handler import FileTooLargeError
-        raise FileTooLargeError(
+
+        exc = FileTooLargeError(
             f"File size {file_size_bytes / 1024 / 1024:.1f} MB exceeds "
             f"{plan or 'free'} plan limit of {max_bytes / 1024 / 1024:.0f} MB"
         )
+        # Runs before the tempfile/download try-block below, so nothing
+        # catches a raised exception here — it would previously propagate
+        # out of the task entirely, skipping handle_task_failure() and
+        # leaving the model stuck in "processing" forever.
+        result = handle_task_failure(engine, model_id, user_id, "size_check", exc)
+        release_task_lock(model_id, "app.tasks.obj.process_obj")
+        return result
 
     with tempfile.TemporaryDirectory(prefix="obj_") as tmpdir:
         obj_local = os.path.join(tmpdir, "input.obj")

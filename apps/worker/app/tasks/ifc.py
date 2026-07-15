@@ -443,10 +443,23 @@ def process_model(self: Task, model_id: str) -> dict:
         file_size_bytes = model.get("file_size_bytes") or 0
         if file_size_bytes > max_bytes:
             from app.tasks.error_handler import FileTooLargeError
-            raise FileTooLargeError(
+
+            exc = FileTooLargeError(
                 f"File size {file_size_bytes / 1024 / 1024:.1f} MB exceeds "
                 f"{plan or 'free'} plan limit of {max_bytes / 1024 / 1024:.0f} MB"
             )
+            # This check runs before the tempfile/download try-block below, so
+            # nothing here catches a raised exception — it would previously
+            # propagate straight out of process_model(), skip
+            # handle_task_failure() entirely, and leave the model stuck in
+            # "processing" forever with no MODEL_FAILED notification.
+            # is_retryable() is not consulted here (unlike the except-block
+            # pattern elsewhere in this function) because FileTooLargeError is
+            # already listed in error_handler._PERMANENT_NAMES — retrying
+            # would just fail identically every time.
+            result = handle_task_failure(engine, model_id, user_id, "size_check", exc)
+            release_task_lock(model_id, "app.tasks.ifc.process_model")
+            return result
 
         with tempfile.TemporaryDirectory(prefix="ifc_") as tmpdir:
             ifc_local = os.path.join(tmpdir, "input.ifc")
