@@ -5,9 +5,6 @@ import importlib
 import os
 
 from celery.signals import worker_process_init, worker_process_shutdown, celeryd_after_setup
-# apps/worker/app/celery_app.py
-from celery import Celery
-from app.config import settings
 
 celery_app = Celery("openformat_worker", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
 
@@ -108,7 +105,7 @@ celery_app.conf.beat_schedule = {
         "schedule": 30.0,  # every 30 seconds
     },
     "cleanup-abandoned-uploads": {
-        "task": "app.tasks.common.cleanup_abandoned_uploads",
+        "task": "app.tasks.maintenance.cleanup_abandoned_uploads",
         "schedule": 3600.0,  # every 1 hour
     }
 }
@@ -125,5 +122,6 @@ import app.tasks.stl           # noqa: E402, F401
 import app.tasks.bcf           # noqa: E402, F401
 import app.tasks.scan          # noqa: E402, F401
 import app.tasks.webhook       # noqa: E402, F401
+import app.tasks.maintainance  # noqa: E402, F401
   
 celery_app.autodiscover_tasks(["app"])

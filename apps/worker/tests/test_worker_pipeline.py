@@ -483,10 +483,10 @@ class TestAbandonedUploadSweeper:
         mock_engine = MagicMock()
         mock_engine.connect.return_value.__enter__.return_value = mock_conn
 
-        with patch("app.tasks.common.get_sync_engine", return_value=mock_engine), \
-             patch("app.tasks.common.update_model_status") as mock_update_status, \
+        with patch("app.tasks.maintainance.get_sync_engine", return_value=mock_engine), \
+             patch("app.tasks.maintainance.update_model_status") as mock_update_status, \
              patch("app.tasks.scan._delete_s3_object") as mock_delete:
-            from app.tasks.common import cleanup_abandoned_uploads
+            from app.tasks.maintainance import cleanup_abandoned_uploads
             cleanup_abandoned_uploads()
 
         mock_update_status.assert_called_once()
@@ -501,9 +501,9 @@ class TestAbandonedUploadSweeper:
         mock_engine = MagicMock()
         mock_engine.connect.return_value.__enter__.return_value = mock_conn
 
-        with patch("app.tasks.common.get_sync_engine", return_value=mock_engine), \
-             patch("app.tasks.common.update_model_status") as mock_update_status:
-            from app.tasks.common import cleanup_abandoned_uploads
+        with patch("app.tasks.maintainance.get_sync_engine", return_value=mock_engine), \
+             patch("app.tasks.maintainance.update_model_status") as mock_update_status:
+            from app.tasks.maintainance import cleanup_abandoned_uploads
             cleanup_abandoned_uploads()
 
         mock_update_status.assert_not_called()
@@ -521,10 +521,10 @@ class TestAbandonedUploadSweeper:
         mock_engine = MagicMock()
         mock_engine.connect.return_value.__enter__.return_value = mock_conn
 
-        with patch("app.tasks.common.get_sync_engine", return_value=mock_engine), \
-             patch("app.tasks.common.update_model_status") as mock_update_status, \
+        with patch("app.tasks.maintainance.get_sync_engine", return_value=mock_engine), \
+             patch("app.tasks.maintainance.update_model_status") as mock_update_status, \
              patch("app.tasks.scan._delete_s3_object", side_effect=Exception("S3 unreachable")):
-            from app.tasks.common import cleanup_abandoned_uploads
+            from app.tasks.maintainance import cleanup_abandoned_uploads
             cleanup_abandoned_uploads()  # must not raise
 
         mock_update_status.assert_called_once()
