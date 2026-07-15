@@ -109,15 +109,7 @@ roomSubscriber.on('pmessage', (_pattern, channel, raw) => {
   }
   if (envelope.originProcessId === PROCESS_ID) return; // already delivered locally
   const modelId = channel.slice(ROOM_CHANNEL_PREFIX.length);
-  const room = rooms.get(modelId);
-  if (!room) return;
-  const payload = JSON.stringify(envelope.message);
-  for (const client of room) {
-    if (client.socket.readyState === 1) {
-      client.socket.send(payload);
-      messagesSent.inc();
-    }
-  }
+  broadcastToLocalRoom(modelId, envelope.message);
 });
 
 // ---------------------------------------------------------------------------
@@ -241,6 +233,50 @@ function isVector3(v) {
   return Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
 }
 
+function normalizeRoomEvent(msg) {
+  if (!msg || !msg.event) return msg;
+  switch (msg.event) {
+    case 'ANNOTATION_CREATED':
+      return {
+        event: 'ANNOTATION_CREATED',
+        annotation: msg.data || msg.annotation || {}
+      };
+    case 'ANNOTATION_UPDATED':
+      return {
+        event: 'ANNOTATION_UPDATED',
+        annotation_id: msg.data?.annotation_id || msg.annotation_id,
+        status: msg.data?.status || msg.status,
+        updated_by: msg.userId || msg.data?.updated_by || msg.updated_by
+      };
+    case 'ANNOTATION_DELETED':
+      return {
+        event: 'ANNOTATION_DELETED',
+        annotation_id: msg.data?.annotation_id || msg.annotation_id
+      };
+    case 'MODEL_SYNC':
+      return {
+        event: 'MODEL_SYNC',
+        data: msg.data || {}
+      };
+    default:
+      return msg;
+  }
+}
+
+function broadcastToLocalRoom(modelId, message, exclude = null) {
+  const room = rooms.get(modelId);
+  if (!room) return;
+  const normalizedMessage = normalizeRoomEvent(message);
+  const payload = JSON.stringify(normalizedMessage);
+  for (const client of room) {
+    if (client === exclude) continue;
+    if (client.socket.readyState === 1) {
+      client.socket.send(payload);
+      messagesSent.inc();
+    }
+  }
+}
+
 /**
  * Broadcast to all clients in a room, optionally excluding one.
  * @param {string} modelId
@@ -248,17 +284,7 @@ function isVector3(v) {
  * @param {object|null} [exclude]
  */
 function broadcast(modelId, message, exclude = null) {
-  const room = rooms.get(modelId);
-  if (room) {
-    const payload = JSON.stringify(message);
-    for (const client of room) {
-      if (client === exclude) continue;
-      if (client.socket.readyState === 1) {
-        client.socket.send(payload);
-        messagesSent.inc();
-      }
-    }
-  }
+  broadcastToLocalRoom(modelId, message, exclude);
 
   // Fan out to other ws-server replicas so clients connected to a
   // different pod (but the same model room) also receive this event.
@@ -461,6 +487,7 @@ fastify.get('/connect', { websocket: true }, async (socket, req) => {
       }
       case 'ANNOTATION_CREATED':
       case 'ANNOTATION_UPDATED':
+      case 'ANNOTATION_DELETED':
       case 'MODEL_SYNC': {
         if (currentModelId) {
           broadcast(currentModelId, { event: msg.event, userId, data: msg.data }, client);

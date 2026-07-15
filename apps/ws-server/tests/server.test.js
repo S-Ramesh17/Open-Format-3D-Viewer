@@ -606,7 +606,7 @@ test('ANNOTATION_CREATED is relayed to other room members', async () => {
     data: { annotation_id: 'ann-1', action: 'created' },
   }));
   const msg = await relayed;
-  assert.equal(msg.data.annotation_id, 'ann-1');
+  assert.equal(msg.annotation.annotation_id, 'ann-1');
 
   wsA.close();
   wsB.close();
@@ -664,8 +664,8 @@ test('ANNOTATION_CREATED published on ws:room:{model_id} by the API reaches ever
   );
 
   const [msgA, msgB] = await Promise.all([receivedByA, receivedByB]);
-  assert.equal(msgA.data.annotation_id, 'ann-backend-1');
-  assert.equal(msgB.data.annotation_id, 'ann-backend-1');
+  assert.equal(msgA.annotation.annotation_id, 'ann-backend-1');
+  assert.equal(msgB.annotation.annotation_id, 'ann-backend-1');
 
   wsA.close();
   wsB.close();
@@ -700,7 +700,71 @@ test('ANNOTATION_UPDATED published on ws:room:{model_id} reaches every room memb
   );
 
   const msgB = await receivedByB;
-  assert.equal(msgB.data.status, 'resolved');
+  assert.equal(msgB.status, 'resolved');
+
+  wsA.close();
+  wsB.close();
+});
+
+test('ANNOTATION_DELETED is relayed to other room members and normalized (client-initiated)', async () => {
+  const modelId = 'model-annotation-delete-1';
+  const tokenA = makeToken('user-A-delete-c');
+  const tokenB = makeToken('user-B-delete-c');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  await sleep(50);
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  await onceOpen(wsB);
+  await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
+
+  const relayed = waitForMessage(wsA, (m) => m.event === 'ANNOTATION_DELETED');
+  wsB.send(JSON.stringify({
+    event: 'ANNOTATION_DELETED',
+    data: { annotation_id: 'ann-del-client-1' },
+  }));
+  
+  const msg = await relayed;
+  
+  // PRD Schema verification: annotation_id is hoisted to root, data wrapper is stripped
+  assert.equal(msg.annotation_id, 'ann-del-client-1');
+  assert.equal('data' in msg, false);
+
+  wsA.close();
+  wsB.close();
+});
+
+test('ANNOTATION_DELETED published on ws:room:{model_id} reaches every room member normalized (backend-initiated)', async () => {
+  const modelId = 'model-annotation-backend-publish-3';
+  const tokenA = makeToken('user-A-backend-delete');
+  const tokenB = makeToken('user-B-backend-delete');
+
+  const wsA = connect(`token=${tokenA}&model_id=${modelId}`);
+  await onceOpen(wsA);
+  await sleep(50);
+  const wsB = connect(`token=${tokenB}&model_id=${modelId}`);
+  await onceOpen(wsB);
+  await waitForMessage(wsA, (m) => m.event === 'USER_JOINED');
+
+  const receivedByB = waitForMessage(wsB, (m) => m.event === 'ANNOTATION_DELETED');
+
+  // Backend publishes with the old nested `data` shape
+  await publisher.publish(
+    `ws:room:${modelId}`,
+    JSON.stringify({
+      originProcessId: null,
+      message: {
+        event: 'ANNOTATION_DELETED',
+        data: { annotation_id: 'ann-backend-del-2' },
+      },
+    })
+  );
+
+  const msgB = await receivedByB;
+  
+  // PRD Schema verification
+  assert.equal(msgB.annotation_id, 'ann-backend-del-2');
+  assert.equal('data' in msgB, false);
 
   wsA.close();
   wsB.close();
@@ -728,7 +792,7 @@ test('a room event for a different model_id is NOT delivered to this room', asyn
   let receivedForeignEvent = false;
   wsA.on('message', (raw) => {
     const msg = JSON.parse(raw.toString());
-    if (msg.event === 'ANNOTATION_CREATED' && msg.data?.annotation_id === 'foreign-ann') {
+    if (msg.event === 'ANNOTATION_CREATED' && msg.annotation?.annotation_id === 'foreign-ann') {
       receivedForeignEvent = true;
     }
   });
@@ -745,7 +809,7 @@ test('a room event for a different model_id is NOT delivered to this room', asyn
   // below: publish a second, legitimate event to this room and wait for
   // it, proving the foreign-room event (published first, same publisher
   // connection, so ordering is preserved) already had its chance to leak.
-  const sentinel = waitForMessage(wsA, (m) => m.event === 'ANNOTATION_CREATED' && m.data?.annotation_id === 'sentinel');
+  const sentinel = waitForMessage(wsA, (m) => m.event === 'ANNOTATION_CREATED' && m.annotation?.annotation_id === 'sentinel');
   await publisher.publish(
     `ws:room:${modelId}`,
     JSON.stringify({
