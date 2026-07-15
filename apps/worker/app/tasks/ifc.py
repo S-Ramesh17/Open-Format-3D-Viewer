@@ -431,7 +431,7 @@ def process_model(self: Task, model_id: str) -> dict:
         logger.info("[IFC] Model row loaded model_id=%s format=%s", model_id, model.get("format"))
 
         user_id = str(model["uploaded_by"])
-        s3_raw_key = model["s3_raw_key"]
+        s3_raw_key = model["raw_s3_key"]
 
         if not s3_raw_key:
             update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
