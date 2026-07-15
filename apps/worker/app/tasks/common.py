@@ -25,6 +25,29 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Per-plan upload size limits — mirrors API values exactly.
+# Worker must remain independent of the API package, so these are defined here.
+# PRD §3.1: free=50 MB, pro=500 MB, enterprise=5 GB
+# ---------------------------------------------------------------------------
+
+PLAN_MAX_UPLOAD_BYTES: dict[str, int] = {
+    "free":       50 * 1024 * 1024,         # 50 MB
+    "pro":       500 * 1024 * 1024,         # 500 MB
+    "enterprise": 5 * 1024 * 1024 * 1024,  # 5 GB
+}
+_DEFAULT_PLAN_MAX = PLAN_MAX_UPLOAD_BYTES["free"]  # unknown plan → most restrictive
+
+
+def get_plan_max_bytes(plan: str | None) -> int:
+    """Return the upload size limit for the given plan name.
+    Falls back to free-tier limit for unknown or None plans.
+    """
+    if plan is None:
+        return _DEFAULT_PLAN_MAX
+    return PLAN_MAX_UPLOAD_BYTES.get(plan, _DEFAULT_PLAN_MAX)
+
+
+# ---------------------------------------------------------------------------
 # S3
 # ---------------------------------------------------------------------------
 
@@ -124,13 +147,17 @@ def get_sync_engine():
         return _sync_engine
 
 def get_model_row(engine, model_id: str) -> dict | None:
-    """Fetch model row as a plain dict. Returns None if not found."""
+    """Fetch model row as a plain dict. Returns None if not found.
+    Includes file_size_bytes and the owner's plan for per-plan upload enforcement.
+    """
     with engine.connect() as conn:
         row = conn.execute(
             _raw_sql(
-                "SELECT id, uploaded_by, raw_s3_key, processed_s3_prefix, "
-                "status, format "
-                "FROM models WHERE id = :mid"
+                "SELECT m.id, m.uploaded_by, m.raw_s3_key, m.processed_s3_prefix, "
+                "m.status, m.format, m.file_size_bytes, u.plan "
+                "FROM models m "
+                "JOIN users u ON u.id = m.uploaded_by "
+                "WHERE m.id = :mid"
             ),
             {"mid": model_id},
         ).fetchone()

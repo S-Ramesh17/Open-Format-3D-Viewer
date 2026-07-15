@@ -40,6 +40,7 @@ from app.tasks.common import (
     download_raw_file,
     get_sync_engine,
     get_model_row,
+    get_plan_max_bytes,
     is_already_processed,
     release_task_lock,
     update_model_status,
@@ -430,12 +431,22 @@ def process_model(self: Task, model_id: str) -> dict:
         logger.info("[IFC] Model row loaded model_id=%s format=%s", model_id, model.get("format"))
 
         user_id = str(model["uploaded_by"])
-        s3_raw_key = model["raw_s3_key"]
-
+        s3_raw_key = model["s3_raw_key"]
 
         if not s3_raw_key:
             update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
             return {"error": "no_s3_key", "model_id": model_id}
+
+        # ── Per-plan size limit ────────────────────────────────────────────────
+        plan = model.get("plan")
+        max_bytes = get_plan_max_bytes(plan)
+        file_size_bytes = model.get("file_size_bytes") or 0
+        if file_size_bytes > max_bytes:
+            from app.tasks.error_handler import FileTooLargeError
+            raise FileTooLargeError(
+                f"File size {file_size_bytes / 1024 / 1024:.1f} MB exceeds "
+                f"{plan or 'free'} plan limit of {max_bytes / 1024 / 1024:.0f} MB"
+            )
 
         with tempfile.TemporaryDirectory(prefix="ifc_") as tmpdir:
             ifc_local = os.path.join(tmpdir, "input.ifc")
@@ -447,12 +458,11 @@ def process_model(self: Task, model_id: str) -> dict:
                 stage = "download"
                 # ── 2. Download from S3 ──────────────────────────────────────
                 download_raw_file(s3_raw_key, ifc_local)
-                logger.info("[IFC] Download complete model_id=%s", model_id)
                 publish_model_progress(user_id, model_id, 10, "download")
 
                 stage = "size_check"
-                # ── 2b. 500 MB file size guard ───────────────────────────────
-                assert_file_size(ifc_local)
+                # ── 2b. Per-plan on-disk file size guard ─────────────────────
+                assert_file_size(ifc_local, max_bytes=max_bytes)
 
                 stage = "parse"
                 # ── 3. Open with IfcOpenShell ────────────────────────────────

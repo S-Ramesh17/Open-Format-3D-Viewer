@@ -30,6 +30,7 @@ from app.tasks.common import (
     dispatch_webhook_event,
     download_raw_file,
     get_model_row,
+    get_plan_max_bytes,
     get_sync_engine,
     is_already_processed,
     publish_model_progress,
@@ -211,11 +212,22 @@ def process_gltf(self: Task, model_id: str) -> dict:
         return {"error": "model_not_found", "model_id": model_id}
 
     user_id = str(model["uploaded_by"])
-    s3_raw_key = model["raw_s3_key"]
+    s3_raw_key = model["s3_raw_key"]
 
     if not s3_raw_key:
         update_model_status(engine, model_id, "failed", error_message="No S3 raw key on model")
         return {"error": "no_s3_key", "model_id": model_id}
+
+    # ── Per-plan size limit ────────────────────────────────────────────────
+    plan = model.get("plan")
+    max_bytes = get_plan_max_bytes(plan)
+    file_size_bytes = model.get("file_size_bytes") or 0
+    if file_size_bytes > max_bytes:
+        from app.tasks.error_handler import FileTooLargeError
+        raise FileTooLargeError(
+            f"File size {file_size_bytes / 1024 / 1024:.1f} MB exceeds "
+            f"{plan or 'free'} plan limit of {max_bytes / 1024 / 1024:.0f} MB"
+        )
 
     with tempfile.TemporaryDirectory(prefix="gltf_") as tmpdir:
         in_ext = Path(s3_raw_key).suffix.lower() or ".gltf"
@@ -231,8 +243,8 @@ def process_gltf(self: Task, model_id: str) -> dict:
             publish_model_progress(user_id, model_id, 10, "download")
 
             stage = "size_check"
-            # ── 2b. 500 MB file size guard ───────────────────────────────
-            assert_file_size(local_input)
+            # ── 2b. Per-plan on-disk file size guard ──────────────────────
+            assert_file_size(local_input, max_bytes=max_bytes)
 
             stage = "validate"
             # ── 3. Validate ────────────────────────────────────────────────
